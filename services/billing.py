@@ -4,6 +4,7 @@
 идёт через action-MCP (его пишет студент) поверх REST-моков, где стоят
 идемпотентность и дневной лимит.
 """
+
 from __future__ import annotations
 
 from mcp.server.auth.middleware.auth_context import get_access_token
@@ -21,7 +22,9 @@ billing = make_mcp_server(
 
 def _subject() -> str:
     at = get_access_token()
-    assert at is not None and at.subject, "инструмент вызван без аутентифицированного токена"
+    assert at is not None and at.subject, (
+        "инструмент вызван без аутентифицированного токена"
+    )
     return at.subject
 
 

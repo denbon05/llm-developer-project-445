@@ -14,6 +14,7 @@ resource_metadata ставит middleware SDK по настройкам server_a
 
 Перед запуском: make infra && make migrate && make seed.
 """
+
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
@@ -40,14 +41,17 @@ async def health(request: Request) -> JSONResponse:
 @asynccontextmanager
 async def lifespan(app):
     """Session managers обязаны жить в event loop сервера (uvicorn)."""
-    managers = [s.session_manager.run() for s in (crm.crm, billing.billing, kb.kb)]
-    for m in managers:
-        await m.__aenter__()
+    managers = [
+        server.session_manager.run()
+        for server in (crm.crm, billing.billing, kb.kb)
+    ]
+    for manager in managers:
+        await manager.__aenter__()
     try:
         yield
     finally:
-        for m in managers:
-            await m.__aexit__(None, None, None)
+        for manager in managers:
+            await manager.__aexit__(None, None, None)
 
 
 def build_app() -> Starlette:

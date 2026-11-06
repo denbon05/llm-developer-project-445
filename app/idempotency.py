@@ -11,4 +11,5 @@ TODO(контракты): StoredResult(duplicate, result) и execute(key, sub, a
 Для смены тарифа дедупликация есть и на стороне биллинга — два барьера;
 для услуг и контактов этот слой единственный.
 """
+
 from __future__ import annotations

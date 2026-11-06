@@ -10,11 +10,11 @@ TTL у всех один, жизнь токена — жизнь сессии.
 ничего не замечает. force_short() — стендовая команда для демо:
 перевыпускает все токены с TTL 1 секунда.
 """
+
 from __future__ import annotations
 
-import jwt as pyjwt
-
 import httpx2
+import jwt as pyjwt
 
 from core import config
 
@@ -54,11 +54,17 @@ class Tokens:
     async def _request(self, resource_key: str, ttl_sec: int) -> None:
         resource = config.RESOURCES[resource_key]
         async with httpx2.AsyncClient(trust_env=False, timeout=10) as client:
-            r = await client.post(
+            response = await client.post(
                 f"{config.ISSUER_URL}/token",
-                json={"resource": resource, "user": self.user_name, "ttl_sec": ttl_sec},
+                json={
+                    "resource": resource,
+                    "user": self.user_name,
+                    "ttl_sec": ttl_sec,
+                },
             )
-            r.raise_for_status()
-            token = r.json()["access_token"]
+            response.raise_for_status()
+            token = response.json()["access_token"]
         self._tokens[resource_key] = token
-        self._claims[resource_key] = pyjwt.decode(token, options={"verify_signature": False})
+        self._claims[resource_key] = pyjwt.decode(
+            token, options={"verify_signature": False}
+        )

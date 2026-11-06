@@ -10,6 +10,7 @@ TODO(контракты):
      available=[...]; normalize_service(raw, catalog) — unknown_service;
      normalize_phone — 11 цифр → bad_phone с примером; normalize_email.
 """
+
 from __future__ import annotations
 
 from pydantic import BaseModel  # noqa: F401 -- used once the TODO above is implemented

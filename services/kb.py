@@ -6,6 +6,7 @@
 но дальше срабатывают выходной guardrail и подтверждение «да — что да?» —
 исполнение без явного «да» человека невозможно.
 """
+
 from __future__ import annotations
 
 from mcp.server.auth.middleware.auth_context import get_access_token
@@ -27,7 +28,10 @@ def _lexical_fallback(query: str) -> list[dict]:
     tokens = set(query.lower().split())
     scored = sorted(
         rows,
-        key=lambda r: sum(w in (r["title"] + " " + r["body"]).lower() for w in tokens),
+        key=lambda row: sum(
+            word in (row["title"] + " " + row["body"]).lower()
+            for word in tokens
+        ),
         reverse=True,
     )
     return scored[:3]
@@ -52,7 +56,16 @@ def search_kb(query: str, limit: int = 2) -> dict:
             " ORDER BY embedding <=> %s::vector LIMIT %s",
             (_vector_literal(qvec), limit),
         )
-    return {"results": [{"source": h["source"], "title": h["title"], "text": h["body"]} for h in hits]}
+    return {
+        "results": [
+            {
+                "source": hit["source"],
+                "title": hit["title"],
+                "text": hit["body"],
+            }
+            for hit in hits
+        ]
+    }
 
 
 def _query_vector(query: str) -> list[float] | None:
@@ -65,5 +78,5 @@ def _query_vector(query: str) -> list[float] | None:
         return None
 
 
-def _vector_literal(v: list[float]) -> str:
-    return "[" + ",".join(f"{x:.6f}" for x in v) + "]"
+def _vector_literal(vector: list[float]) -> str:
+    return "[" + ",".join(f"{component:.6f}" for component in vector) + "]"

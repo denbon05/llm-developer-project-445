@@ -10,12 +10,12 @@
 один повтор. Ошибка роли (forbidden) — не транспортная: она возвращается
 вызывающему как есть.
 """
+
 from __future__ import annotations
 
 import json
 
 import httpx2
-
 from agents.mcp import MCPServerStreamableHttp
 from mcp.shared.exceptions import MCPError
 from mcp.types import TextContent, Tool
@@ -27,17 +27,25 @@ FORBIDDEN_CODE = -32003
 
 def _client_factory(headers=None, timeout=None, auth=None, **kwargs):
     """httpx-клиент соединения: мимо системного прокси (trust_env=False)."""
-    return httpx2.AsyncClient(headers=headers, timeout=timeout, auth=auth, trust_env=False)
+    return httpx2.AsyncClient(
+        headers=headers, timeout=timeout, auth=auth, trust_env=False
+    )
 
 
 class McpPool:
     """Соединения сессии с набором MCP-серверов (resource_key → сервер)."""
 
-    def __init__(self, tokens, resource_keys: tuple[str, ...] = ("crm", "billing", "kb", "actions")) -> None:
+    def __init__(
+        self,
+        tokens,
+        resource_keys: tuple[str, ...] = ("crm", "billing", "kb", "actions"),
+    ) -> None:
         self.tokens = tokens
         self.resource_keys = resource_keys
         self._servers: dict[str, MCPServerStreamableHttp] = {}
-        self._tools: dict[str, tuple[str, Tool]] = {}  # имя → (resource_key, Tool)
+        self._tools: dict[
+            str, tuple[str, Tool]
+        ] = {}  # имя → (resource_key, Tool)
 
     async def connect(self) -> None:
         for key in self.resource_keys:
@@ -80,7 +88,9 @@ class McpPool:
     def tool_description(self, name: str) -> str:
         return self._tools[name][1].description or name
 
-    async def call(self, resource_key: str, tool_name: str, args: dict | None = None) -> dict:
+    async def call(
+        self, resource_key: str, tool_name: str, args: dict | None = None
+    ) -> dict:
         """Вызов инструмента с одной попыткой самовосстановления.
 
         Транспортная ошибка (включая 401 истёкшего токена) → refresh +
@@ -89,32 +99,42 @@ class McpPool:
         """
         try:
             return await self._call_once(resource_key, tool_name, args)
-        except MCPError as e:
-            if getattr(e, "code", None) == FORBIDDEN_CODE:
+        except MCPError as error:
+            if getattr(error, "code", None) == FORBIDDEN_CODE:
                 raise  # отказ самого инструмента (например, по роли) — не транспорт
             return await self._recover_and_retry(resource_key, tool_name, args)
-        except Exception:
+        except Exception:  # noqa: BLE001 -- any other failure counts as transport: reconnect, retry once
+            # Ignored for now (BLE001): log it, then narrow the except.
             return await self._recover_and_retry(resource_key, tool_name, args)
 
-    async def _recover_and_retry(self, resource_key: str, tool_name: str, args: dict | None) -> dict:
+    async def _recover_and_retry(
+        self, resource_key: str, tool_name: str, args: dict | None
+    ) -> dict:
         await self.tokens.refresh(resource_key)
         old = self._servers.pop(resource_key, None)
         if old is not None:
             try:
                 await old.__aexit__(None, None, None)
-            except Exception:  # noqa: BLE001 — закрытие не должно ронять сессию
+            except Exception:  # noqa: BLE001, S110 — закрытие не должно ронять сессию
+                # Ignored for now (S110): debug-log it once we have logging.
                 pass
         await self._connect(resource_key)
         return await self._call_once(resource_key, tool_name, args)
 
-    async def _call_once(self, resource_key: str, tool_name: str, args: dict | None) -> dict:
-        result = await self._servers[resource_key].call_tool(tool_name, args or {})
+    async def _call_once(
+        self, resource_key: str, tool_name: str, args: dict | None
+    ) -> dict:
+        result = await self._servers[resource_key].call_tool(
+            tool_name, args or {}
+        )
         if not result.content:
             text = "{}"
         elif isinstance(first := result.content[0], TextContent):
             text = first.text
         else:
-            raise TypeError(f"{tool_name} returned {type(first).__name__}, expected text")
+            raise TypeError(
+                f"{tool_name} returned {type(first).__name__}, expected text"
+            )
         try:
             return json.loads(text)
         except (TypeError, ValueError):
@@ -124,6 +144,7 @@ class McpPool:
         for server in self._servers.values():
             try:
                 await server.__aexit__(None, None, None)
-            except Exception:  # noqa: BLE001 — закрытие не должно ронять сессию
+            except Exception:  # noqa: BLE001, S110 — закрытие не должно ронять сессию
+                # Ignored for now (S110): debug-log it once we have logging.
                 pass
         self._servers.clear()

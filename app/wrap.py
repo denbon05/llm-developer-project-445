@@ -22,6 +22,7 @@ TODO(права): два барьера —
   подготовленную карточку проводить через pep.prepare — Deny → карточки
   нет, модель получает отказ с reason.
 """
+
 from __future__ import annotations
 
 import json
@@ -38,23 +39,38 @@ def wrap_mcp_tool(session: Session, name: str) -> FunctionTool:
 
     async def invoke(ctx: RunContextWrapper, input_json: str) -> str:
         try:
-            args = json.loads(input_json) if input_json and input_json.strip() else {}
+            args = (
+                json.loads(input_json)
+                if input_json and input_json.strip()
+                else {}
+            )
         except (TypeError, ValueError):
             return json.dumps(
-                {"error": "bad_arguments", "detail": "аргументы — не JSON; повтори вызов по схеме"},
+                {
+                    "error": "bad_arguments",
+                    "detail": "аргументы — не JSON; повтори вызов по схеме",
+                },
                 ensure_ascii=False,
             )
         session.note(name)
         try:
-            result = await session.pool.call(session.pool.resource_of(name), name, args)
-        except MCPError as e:
-            data = e.data if isinstance(e.data, dict) else {}
+            result = await session.pool.call(
+                session.pool.resource_of(name), name, args
+            )
+        except MCPError as error:
+            data = error.data if isinstance(error.data, dict) else {}
             return json.dumps(
-                {"error": getattr(e, "message", "tool_failed")[:60], **data},
+                {
+                    "error": getattr(error, "message", "tool_failed")[:60],
+                    **data,
+                },
                 ensure_ascii=False,
             )
-        except Exception as e:  # noqa: BLE001 — сбой сервера становится данными для модели
-            return json.dumps({"error": "tool_failed", "detail": str(e)[:160]}, ensure_ascii=False)
+        except Exception as error:  # noqa: BLE001 — сбой сервера становится данными для модели
+            return json.dumps(
+                {"error": "tool_failed", "detail": str(error)[:160]},
+                ensure_ascii=False,
+            )
         return json.dumps(result, ensure_ascii=False)
 
     return FunctionTool(
@@ -68,4 +84,8 @@ def wrap_mcp_tool(session: Session, name: str) -> FunctionTool:
 def wrap_tools(session: Session, names: list[str]) -> list[FunctionTool]:
     """Собрать обёртки для перечня имён (какие имена давать — решает код)."""
     known = set(session.pool.tool_names())
-    return [wrap_mcp_tool(session, n) for n in names if n in known]
+    return [
+        wrap_mcp_tool(session, tool_name)
+        for tool_name in names
+        if tool_name in known
+    ]

@@ -32,6 +32,7 @@ JWT, который backend уже получил у издателя (дове�
 
 Журнал решений — таблица policy_events в Postgres.
 """
+
 from __future__ import annotations
 
 import time
@@ -57,14 +58,17 @@ TARIFF_CHANGE_LIMIT = 2  # для синтеза reason; само число с�
 IDENTITY_KEYS = ("user_id", "account", "subscriber", "msisdn")
 
 
-def _audit(session_id: str, sub: str, action: str, decision: str, reason: str) -> None:
+def _audit(
+    session_id: str, sub: str, action: str, decision: str, reason: str
+) -> None:
     try:
         db.execute(
             "insert into policy_events(session_id, sub, action, decision, reason)"
             " values (%s, %s, %s, %s, %s)",
             (session_id, sub, action, decision, reason),
         )
-    except Exception:  # noqa: BLE001 — журнал решений не должен валить сервис
+    except Exception:  # noqa: BLE001, S110 — журнал решений не должен валить сервис
+        # Ignored for now (S110): debug-log it once we have logging.
         pass
 
 
@@ -73,7 +77,9 @@ class Session:
     session_id: str
     subject: dict
     authorizer: native.NativeAuthorizer
-    cards: dict[str, dict] = field(default_factory=dict)        # pending_id → {action, ts}
+    cards: dict[str, dict] = field(
+        default_factory=dict
+    )  # pending_id → {action, ts}
     confirmations: dict[str, dict] = field(default_factory=dict)
     execute_requests: int = 0
     last_seen: float = field(default_factory=time.monotonic)
@@ -87,41 +93,53 @@ class PolicyService:
         self._schema = SCHEMA_FILE.read_text(encoding="utf-8")
         report = native.validate_policy(self._policy, self._schema)
         if not report.get("passed"):
-            raise SystemExit(f"политики не прошли валидацию: {report['errors']}")
+            raise SystemExit(
+                f"политики не прошли валидацию: {report['errors']}"
+            )
         self._sessions: dict[str, Session] = {}
 
     def open_session(self, session_id: str, subject: dict) -> Session:
-        s = Session(
+        session = Session(
             session_id=session_id,
             subject=dict(subject),
             authorizer=native.NativeAuthorizer(self._policy, self._schema),
         )
-        self._sessions[session_id] = s
-        return s
+        self._sessions[session_id] = session
+        return session
 
     def _session(self, session_id: str) -> Session:
-        s = self._sessions.get(session_id)
-        if s is None:
+        session = self._sessions.get(session_id)
+        if session is None:
             raise KeyError(f"нет сессии {session_id} — PEP не открывал сессию")
-        s.last_seen = time.monotonic()
-        return s
+        session.last_seen = time.monotonic()
+        return session
 
-    def _authorize(self, s: Session, action: str, payload: dict) -> dict:
-        verdict = s.authorizer.authorize_request(
-            f"Tel::Action::{action}", self._principal(s), self._resource(), payload
+    def _authorize(self, session: Session, action: str, payload: dict) -> dict:
+        verdict = session.authorizer.authorize_request(
+            f"Tel::Action::{action}",
+            self._principal(session),
+            self._resource(),
+            payload,
         )
         decision = "Allow" if verdict == "Allow" else "Deny"
-        reason = "" if decision == "Allow" else self._explain(s, action, payload)
-        _audit(s.session_id, s.subject["sub"], action, decision, reason)
+        reason = (
+            ""
+            if decision == "Allow"
+            else self._explain(session, action, payload)
+        )
+        _audit(
+            session.session_id, session.subject["sub"], action, decision, reason
+        )
         return {"decision": decision, "reason": reason}
 
     def prepare(self, session_id: str, payload: dict) -> dict:
         """Prepare: решение политики; Allow фиксирует карточку в журнале."""
-        s = self._session(session_id)
-        result = self._authorize(s, "Prepare", payload)
+        session = self._session(session_id)
+        result = self._authorize(session, "Prepare", payload)
         if result["decision"] == "Allow":
-            s.cards[payload["pending_id"]] = {
-                "action": payload.get("action"), "ts": time.monotonic(),
+            session.cards[payload["pending_id"]] = {
+                "action": payload.get("action"),
+                "ts": time.monotonic(),
             }
         return result
 
@@ -135,53 +153,60 @@ class PolicyService:
         Prepare в live не закрывается — время жизни карточки проверяет
         сервис.
         """
-        s = self._session(session_id)
+        session = self._session(session_id)
         pending_id = payload.get("pending_id") or ""
-        card = s.cards.get(pending_id)
+        card = session.cards.get(pending_id)
         if card is None:
             result = {"decision": "Deny", "reason": "card_not_prepared"}
         elif time.monotonic() - card["ts"] > CARD_TTL_SEC:
             result = {"decision": "Deny", "reason": "confirmation_expired"}
         else:
-            result = self._authorize(s, "ConfirmCard", payload)
+            result = self._authorize(session, "ConfirmCard", payload)
             if result["decision"] == "Allow":
-                s.confirmations[pending_id] = {
-                    "action": payload.get("action"), "ts": time.monotonic(),
+                session.confirmations[pending_id] = {
+                    "action": payload.get("action"),
+                    "ts": time.monotonic(),
                 }
-        _audit(s.session_id, s.subject["sub"], "ConfirmCard", result["decision"], result["reason"])
+        _audit(
+            session.session_id,
+            session.subject["sub"],
+            "ConfirmCard",
+            result["decision"],
+            result["reason"],
+        )
         return result
 
     def execute(self, session_id: str, payload: dict) -> dict:
         """Execute: решение политики (окно ConfirmCard + лимит — forbid)."""
-        s = self._session(session_id)
-        s.execute_requests += 1
-        return self._authorize(s, "Execute", payload)
+        session = self._session(session_id)
+        session.execute_requests += 1
+        return self._authorize(session, "Execute", payload)
 
-    def _explain(self, s: Session, action: str, payload: dict) -> str:
+    def _explain(self, session: Session, action: str, payload: dict) -> str:
         """Reason у Deny: биндинг отдаёт только строку, причину называет сервис."""
-        if any(k in payload for k in IDENTITY_KEYS):
+        if any(key in payload for key in IDENTITY_KEYS):
             return "identity_in_args"
         if not payload.get("guard_ok", False):
             return "guard_not_ok"
-        if s.subject["role"] != "client":
+        if session.subject["role"] != "client":
             return "role_has_no_write"
-        if "tariffs:write" not in s.subject["scopes"]:
+        if "tariffs:write" not in session.subject["scopes"]:
             return "no_write_scope"
         if action == "ConfirmCard":
-            if payload.get("pending_id") not in s.cards:
+            if payload.get("pending_id") not in session.cards:
                 return "card_not_prepared"
             return "confirmation_mismatch"
         if action == "Execute":
-            if s.execute_requests > TARIFF_CHANGE_LIMIT:
+            if session.execute_requests > TARIFF_CHANGE_LIMIT:
                 return "session_limit"
-            if payload.get("pending_id") not in s.confirmations:
+            if payload.get("pending_id") not in session.confirmations:
                 return "confirmation_missing"
             return "confirmation_mismatch"
         return "deny_by_default"
 
     @staticmethod
-    def _principal(s: Session) -> str:
-        return f'Tel::OAuthUser::"{s.subject["sub"]}"'
+    def _principal(session: Session) -> str:
+        return f'Tel::OAuthUser::"{session.subject["sub"]}"'
 
     @staticmethod
     def _resource() -> str:
@@ -215,8 +240,8 @@ async def authorize(request: Request) -> JSONResponse:
             result = SERVICE.prepare(body["session_id"], body.get("input", {}))
         else:
             result = SERVICE.execute(body["session_id"], body.get("input", {}))
-    except KeyError as e:
-        return JSONResponse({"error": str(e)}, status_code=404)
+    except KeyError as error:
+        return JSONResponse({"error": str(error)}, status_code=404)
     return JSONResponse(result)
 
 
@@ -224,8 +249,8 @@ async def confirm(request: Request) -> JSONResponse:
     body = await request.json()
     try:
         result = SERVICE.confirm(body["session_id"], body.get("input", {}))
-    except KeyError as e:
-        return JSONResponse({"error": str(e)}, status_code=404)
+    except KeyError as error:
+        return JSONResponse({"error": str(error)}, status_code=404)
     return JSONResponse(result)
 
 
@@ -242,4 +267,6 @@ def build_app() -> Starlette:
 
 if __name__ == "__main__":
     # один воркер: authorizer однопоточный (unsendable), журнал сессии живёт в процессе
-    uvicorn.run(build_app(), host="127.0.0.1", port=config.PDP_PORT, log_level="warning")
+    uvicorn.run(
+        build_app(), host="127.0.0.1", port=config.PDP_PORT, log_level="warning"
+    )

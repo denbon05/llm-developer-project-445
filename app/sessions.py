@@ -10,6 +10,7 @@ claims / allowlist / pep / guard_state: claims токена определяют
 verdikt guardrail хода. Там же функция pep_of(session) — отдаёт PEP
 сессии, создавая его при первом обращении (её зовёт оркестратор и smoke).
 """
+
 from __future__ import annotations
 
 import uuid
@@ -26,12 +27,14 @@ class Session:
     user: config.User
     tokens: Tokens
     pool: McpPool
-    thread: list = field(default_factory=list)   # история планировщика
+    thread: list = field(default_factory=list)  # история планировщика
     trace: list[str] = field(default_factory=list)
-    trace_id: str = ""                           # сквозной id текущего хода
-    planner: object | None = None                # собирается лениво на первом ходе
-    pending_card: object | None = None           # живая карточка подтверждения
-    session_id: str = field(default_factory=lambda: f"sess_{uuid.uuid4().hex[:8]}")
+    trace_id: str = ""  # сквозной id текущего хода
+    planner: object | None = None  # собирается лениво на первом ходе
+    pending_card: object | None = None  # живая карточка подтверждения
+    session_id: str = field(
+        default_factory=lambda: f"sess_{uuid.uuid4().hex[:8]}"
+    )
 
     def note(self, tool: str) -> None:
         self.trace.append(tool)

@@ -23,6 +23,7 @@ TODO(агенты):
   5. next_plan(planner, history, message) — один вызов Runner.run
      (через пул llm_pool, если он включён) → (Plan, история хода).
 """
+
 from __future__ import annotations
 
 from pydantic import BaseModel

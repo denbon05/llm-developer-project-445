@@ -38,6 +38,7 @@ TODO(guardrail) — guardrail: input-проверка реплики до все
   недоступный сервис → session.guard_state["ok"] = False (fail-closed
   для действий), чтение продолжается.
 """
+
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable

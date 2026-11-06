@@ -10,14 +10,15 @@ Backend — доверенный клиент: он просит токен дл
 и конкретного MCP-сервера (параметр resource, RFC 8707). Проверяющая
 сторона — MCP-серверы — устроена как в проде.
 """
+
 from __future__ import annotations
 
 import time
 
 import jwt
-from jwt.algorithms import RSAAlgorithm
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
+from jwt.algorithms import RSAAlgorithm
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
@@ -39,7 +40,9 @@ _PUBLIC_JWK: dict = RSAAlgorithm.to_jwk(_private_key.public_key(), as_dict=True)
 _PUBLIC_JWK.update({"kid": KID, "alg": "RS256", "use": "sig"})
 
 
-def issue_token(*, resource: str, sub: str, role: str, scopes: list[str], ttl_sec: int) -> tuple[str, int]:
+def issue_token(
+    *, resource: str, sub: str, role: str, scopes: list[str], ttl_sec: int
+) -> tuple[str, int]:
     """Токен под конкретный адресат: aud = resource (RFC 8707)."""
     now = int(time.time())
     claims = {
@@ -51,7 +54,9 @@ def issue_token(*, resource: str, sub: str, role: str, scopes: list[str], ttl_se
         "iat": now,
         "exp": now + ttl_sec,
     }
-    token = jwt.encode(claims, _PRIVATE_PEM, algorithm="RS256", headers={"kid": KID})
+    token = jwt.encode(
+        claims, _PRIVATE_PEM, algorithm="RS256", headers={"kid": KID}
+    )
     return token, claims["exp"]
 
 
@@ -66,7 +71,9 @@ async def token_endpoint(request: Request) -> JSONResponse:
     resource = body.get("resource", "")
     ttl = int(body.get("ttl_sec", TOKEN_TTL_SEC))
 
-    user = db.fetchone("SELECT sub, role, scopes FROM users WHERE login = %s", (user_name,))
+    user = db.fetchone(
+        "SELECT sub, role, scopes FROM users WHERE login = %s", (user_name,)
+    )
     if user is None or not resource:
         return JSONResponse({"error": "invalid_request"}, status_code=400)
 
@@ -77,7 +84,9 @@ async def token_endpoint(request: Request) -> JSONResponse:
         scopes=list(user["scopes"]),
         ttl_sec=ttl,
     )
-    return JSONResponse({"access_token": token, "token_type": "Bearer", "expires_at": exp})
+    return JSONResponse(
+        {"access_token": token, "token_type": "Bearer", "expires_at": exp}
+    )
 
 
 async def jwks_endpoint(request: Request) -> JSONResponse:

@@ -16,4 +16,5 @@ TODO(аудит): в run_agent — INSERT в llm_calls: trace_id, имя аге�
 TODO(failover): если llm_pool.enabled() — запуск через
   llm_pool.run_with_failover, в llm_calls — фактический провайдер.
 """
+
 from __future__ import annotations

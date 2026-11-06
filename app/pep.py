@@ -16,4 +16,5 @@ TODO(права):
      **subject}. Недоступный PDP — fail-closed: Decision(False,
      "pdp_unavailable").
 """
+
 from __future__ import annotations

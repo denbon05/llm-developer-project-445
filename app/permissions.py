@@ -21,6 +21,7 @@ TODO(права) — ядро шага:
      барьер 2: операция вне allowlist — отказ operation_not_allowed:<op>;
      identity-ключи в аргументах — отказ object_from_arguments:<ключ>; лимиты считает политика.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

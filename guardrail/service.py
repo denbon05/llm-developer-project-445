@@ -19,4 +19,5 @@ TODO(guardrail):
 Недоступность сервиса — не крах контура: оркестратор решает сам
 (fail-closed для действий, деградация для чтения).
 """
+
 from __future__ import annotations

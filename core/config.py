@@ -3,6 +3,7 @@
 Все http-клиенты контура создаются с trust_env=False: системный прокси
 не должен перехватывать запросы к 127.0.0.1 (иначе 502 или зависание).
 """
+
 from __future__ import annotations
 
 import os
@@ -37,7 +38,9 @@ PDP_URL = f"http://127.0.0.1:{PDP_PORT}"
 GUARDRAIL_PORT = int(os.environ.get("GUARDRAIL_PORT", "8300"))
 GUARDRAIL_URL = f"http://127.0.0.1:{GUARDRAIL_PORT}"
 
-PG_DSN = os.environ.get("PG_DSN", "postgresql://operator:operator@127.0.0.1:5434/operator")
+PG_DSN = os.environ.get(
+    "PG_DSN", "postgresql://operator:operator@127.0.0.1:5434/operator"
+)
 
 TOKEN_TTL_SEC = int(os.environ.get("TOKEN_TTL_SEC", "3600"))
 CARD_TTL_SEC = int(os.environ.get("CARD_TTL_SEC", "120"))
@@ -66,9 +69,23 @@ class User:
 # anna — клиент с правом менять тарифы; boris — клиент только на чтение;
 # olga — оператор поддержки.
 USERS: dict[str, User] = {
-    "anna": User("anna", "u_4f2a", "Анна", "client", ["tariffs:read", "tariffs:write", "charges:read"]),
-    "boris": User("boris", "u_9b1c", "Борис", "client", ["tariffs:read", "charges:read"]),
-    "olga": User("olga", "u_op7", "Ольга", "operator", ["tariffs:read", "charges:read", "support:read"]),
+    "anna": User(
+        "anna",
+        "u_4f2a",
+        "Анна",
+        "client",
+        ["tariffs:read", "tariffs:write", "charges:read"],
+    ),
+    "boris": User(
+        "boris", "u_9b1c", "Борис", "client", ["tariffs:read", "charges:read"]
+    ),
+    "olga": User(
+        "olga",
+        "u_op7",
+        "Ольга",
+        "operator",
+        ["tariffs:read", "charges:read", "support:read"],
+    ),
 }
 
 MODEL_NAME = ""
@@ -80,10 +97,16 @@ def setup_model() -> str:
     base_url = os.environ.get("LLM_BASE_URL")
     model_name = os.environ.get("LLM_MODEL")
     if not base_url or not model_name:
-        raise SystemExit("Нет LLM_BASE_URL/LLM_MODEL: скопируйте .env.example в .env и заполните")
+        raise SystemExit(
+            "Нет LLM_BASE_URL/LLM_MODEL: скопируйте .env.example в .env и заполните"
+        )
 
     import httpx2
-    from agents import set_default_openai_api, set_default_openai_client, set_tracing_disabled
+    from agents import (
+        set_default_openai_api,
+        set_default_openai_client,
+        set_tracing_disabled,
+    )
     from openai import AsyncOpenAI
 
     client = AsyncOpenAI(

@@ -5,6 +5,7 @@
 Для учебного стенда — короткоживущие соединения на операцию: просто и
 достаточно; в проде здесь был бы пул.
 """
+
 from __future__ import annotations
 
 import sys
@@ -37,13 +38,15 @@ def _plain(row: tuple) -> tuple:
     """numeric → float: значения уходят в JSON-ответы и tool-результаты."""
     from decimal import Decimal
 
-    return tuple(float(x) if isinstance(x, Decimal) else x for x in row)
+    return tuple(
+        float(value) if isinstance(value, Decimal) else value for value in row
+    )
 
 
 def fetchall(sql: LiteralString, params: tuple = ()) -> list[dict]:
     with connect() as conn, conn.cursor() as cur:
         cur.execute(sql, params)
-        cols = [d.name for d in cur.description or []]
+        cols = [column.name for column in cur.description or []]
         return [dict(zip(cols, _plain(row))) for row in cur.fetchall()]
 
 

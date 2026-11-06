@@ -7,6 +7,7 @@ text-embedding-embeddinggemma-300m-qat в LM Studio) и складываются
 kb/vectors.json. `make seed` грузит статьи вместе с векторами в
 kb_chunks — локальная модель эмбеддингов студенту не требуется.
 """
+
 from __future__ import annotations
 
 import json
@@ -37,22 +38,30 @@ def read_articles() -> list[dict]:
 
 def embed(texts: list[str]) -> list[list[float]]:
     with httpx2.Client(trust_env=False, timeout=120) as client:
-        r = client.post(
+        response = client.post(
             EMBED_URL,
             json={"model": EMBED_MODEL, "input": texts},
         )
-        r.raise_for_status()
-        items = sorted(r.json()["data"], key=lambda d: d["index"])
+        response.raise_for_status()
+        items = sorted(response.json()["data"], key=lambda item: item["index"])
         return [item["embedding"] for item in items]
 
 
 def main() -> None:
     articles = read_articles()
-    vectors = embed([DOC_PREFIX + a["title"] + "\n" + a["body"] for a in articles])
+    vectors = embed(
+        [
+            DOC_PREFIX + article["title"] + "\n" + article["body"]
+            for article in articles
+        ]
+    )
     dim = len(vectors[0])
     OUT_FILE.write_text(
         json.dumps(
-            [{**a, "vector": v} for a, v in zip(articles, vectors)],
+            [
+                {**article, "vector": vector}
+                for article, vector in zip(articles, vectors)
+            ],
             ensure_ascii=False,
         ),
         encoding="utf-8",

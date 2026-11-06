@@ -4,6 +4,7 @@
 Один и тот же слой обслуживает read-MCP-инструменты и REST-интерфейс
 моков; эффект действий сразу виден в read-запросах.
 """
+
 from __future__ import annotations
 
 import yaml
@@ -21,6 +22,7 @@ def _demo() -> dict:
 
 
 # ── CRM ──────────────────────────────────────────────────────────────────
+
 
 def subscriber(sub: str) -> dict | None:
     return db.fetchone("SELECT * FROM subscribers WHERE sub = %s", (sub,))
@@ -49,8 +51,11 @@ def set_contacts(sub: str, *, phone: str | None, email: str | None) -> dict:
         " where sub = %s returning *",
         (phone, email, sub),
     )
-    return {"outcome": "updated" if row else "not_found", "phone": row["phone"] if row else None,
-            "email": row["email"] if row else None}
+    return {
+        "outcome": "updated" if row else "not_found",
+        "phone": row["phone"] if row else None,
+        "email": row["email"] if row else None,
+    }
 
 
 def toggle_service(sub: str, service: str, enabled: bool) -> dict:
@@ -61,10 +66,15 @@ def toggle_service(sub: str, service: str, enabled: bool) -> dict:
     )
     if row is None:
         return {"outcome": "unknown_service"}
-    return {"outcome": "toggled", "service": row["service"], "enabled": row["enabled"]}
+    return {
+        "outcome": "toggled",
+        "service": row["service"],
+        "enabled": row["enabled"],
+    }
 
 
 # ── Billing ──────────────────────────────────────────────────────────────
+
 
 def charges(sub: str, limit: int = 6) -> list[dict]:
     return db.fetchall(
@@ -84,7 +94,9 @@ def tariff_changes_today(sub: str) -> int:
     return int(row["n"])
 
 
-def apply_tariff_change(*, sub: str, new_tariff: str, idempotency_key: str) -> dict:
+def apply_tariff_change(
+    *, sub: str, new_tariff: str, idempotency_key: str
+) -> dict:
     """Исполнение смены тарифа: идемпотентно, с дневным лимитом.
 
     Исходы: executed / duplicate / daily_limit / not_found / same_tariff /
@@ -98,7 +110,9 @@ def apply_tariff_change(*, sub: str, new_tariff: str, idempotency_key: str) -> d
         if known:
             return {**known[0], "outcome": "duplicate"}
 
-        record = cur.execute("SELECT tariff FROM subscribers WHERE sub = %s", (sub,)).fetchone()
+        record = cur.execute(
+            "SELECT tariff FROM subscribers WHERE sub = %s", (sub,)
+        ).fetchone()
         if record is None:
             return {"outcome": "not_found"}
         current = record[0]
@@ -106,7 +120,8 @@ def apply_tariff_change(*, sub: str, new_tariff: str, idempotency_key: str) -> d
             return {"outcome": "same_tariff", "current": current}
 
         target = cur.execute(
-            "SELECT price_rub, available FROM tariffs WHERE name = %s", (new_tariff,)
+            "SELECT price_rub, available FROM tariffs WHERE name = %s",
+            (new_tariff,),
         ).fetchone()
         if target is None:
             return {"outcome": "unknown_tariff"}
@@ -114,7 +129,10 @@ def apply_tariff_change(*, sub: str, new_tariff: str, idempotency_key: str) -> d
             return {"outcome": "tariff_not_available", "tariff": new_tariff}
 
         if tariff_changes_today(sub) >= DAILY_TARIFF_CHANGE_LIMIT:
-            return {"outcome": "daily_limit", "limit": DAILY_TARIFF_CHANGE_LIMIT}
+            return {
+                "outcome": "daily_limit",
+                "limit": DAILY_TARIFF_CHANGE_LIMIT,
+            }
 
         price_row = cur.execute(
             "SELECT price_rub FROM tariffs WHERE name = %s", (current,)
@@ -122,7 +140,10 @@ def apply_tariff_change(*, sub: str, new_tariff: str, idempotency_key: str) -> d
         assert price_row is not None  # subscribers.tariff references tariffs
         cur_price = price_row[0]
 
-        cur.execute("UPDATE subscribers SET tariff = %s WHERE sub = %s", (new_tariff, sub))
+        cur.execute(
+            "UPDATE subscribers SET tariff = %s WHERE sub = %s",
+            (new_tariff, sub),
+        )
         cur.execute(
             "INSERT INTO tariff_change_log(sub, before, after, idempotency_key)"
             " VALUES (%s, %s, %s, %s)",
@@ -136,7 +157,12 @@ def apply_tariff_change(*, sub: str, new_tariff: str, idempotency_key: str) -> d
         }
         cur.execute(
             "INSERT INTO idempotency(key, sub, action, result) VALUES (%s, %s, %s, %s)",
-            (idempotency_key, sub, "tariff_change", __import__("json").dumps(view, ensure_ascii=False)),
+            (
+                idempotency_key,
+                sub,
+                "tariff_change",
+                __import__("json").dumps(view, ensure_ascii=False),
+            ),
         )
         conn.commit()
         return {"outcome": "executed", **view}
@@ -161,6 +187,7 @@ def set_daily_quota(sub: str, remaining: int) -> dict:
 
 
 # ── Tickets ──────────────────────────────────────────────────────────────
+
 
 def create_ticket(sub: str, subject: str, note: str) -> dict:
     row = db.fetchone(
@@ -192,7 +219,14 @@ def tickets(sub: str | None = None) -> list[dict]:
 
 def counts() -> dict:
     out = {}
-    for table in ("subscribers", "tariffs", "billing_events", "kb_chunks", "tickets", "audit_log"):
+    for table in (
+        "subscribers",
+        "tariffs",
+        "billing_events",
+        "kb_chunks",
+        "tickets",
+        "audit_log",
+    ):
         row = db.fetchone(f"SELECT count(*) AS n FROM {table}")
         assert row is not None  # count(*) always returns a row
         out[table] = int(row["n"])

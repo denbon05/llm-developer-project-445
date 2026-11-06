@@ -10,4 +10,5 @@ TODO(агенты):
   3. editor_task(message, runs) — склейка: сообщение абонента +
      нумерованные доклады агентов + просьба написать ответ.
 """
+
 from __future__ import annotations

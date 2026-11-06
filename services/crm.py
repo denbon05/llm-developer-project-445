@@ -9,6 +9,7 @@
 чужой идентификатор легитимен: он доступен только роли operator, и это
 проверяет сервер по role из claims.
 """
+
 from __future__ import annotations
 
 from mcp.server.auth.middleware.auth_context import get_access_token
@@ -29,7 +30,9 @@ crm = make_mcp_server(
 
 def _subject() -> tuple[str, dict]:
     at = get_access_token()
-    assert at is not None and at.subject, "инструмент вызван без аутентифицированного токена"
+    assert at is not None and at.subject, (
+        "инструмент вызван без аутентифицированного токена"
+    )
     return at.subject, at.claims or {}
 
 
@@ -39,7 +42,11 @@ def _require_role(*roles: str) -> tuple[str, dict]:
         raise MCPError(
             code=FORBIDDEN_CODE,
             message="forbidden: role required",
-            data={"error": "forbidden", "required_roles": list(roles), "sub": sub},
+            data={
+                "error": "forbidden",
+                "required_roles": list(roles),
+                "sub": sub,
+            },
         )
     return sub, claims
 
@@ -82,7 +89,9 @@ def get_my_tariff() -> dict:
 @crm.tool()
 def list_tariffs() -> dict:
     """Каталог тарифов, доступных для подключения (публичные данные)."""
-    return {"tariffs": [t for t in store.tariffs() if t["available"]]}
+    return {
+        "tariffs": [tariff for tariff in store.tariffs() if tariff["available"]]
+    }
 
 
 @crm.tool()
@@ -96,4 +105,8 @@ def get_subscriber_overview(subscriber_id: str) -> dict:
     record = store.subscriber(subscriber_id)
     if record is None:
         return {"error": "not_found"}
-    return {"subscriber_id": subscriber_id, "name": record["name"], "tariff": record["tariff"]}
+    return {
+        "subscriber_id": subscriber_id,
+        "name": record["name"],
+        "tariff": record["tariff"],
+    }

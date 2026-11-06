@@ -5,6 +5,7 @@
 тикет-очередь. Аутентификации нет — это внутренний сегмент сети стенда;
 границей доверия в контуре служит action-MCP с проверкой JWT.
 """
+
 from __future__ import annotations
 
 from starlette.requests import Request
@@ -24,15 +25,17 @@ async def crm_subscriber(request: Request) -> JSONResponse:
     record = store.subscriber(sub)
     if record is None:
         return JSONResponse({"error": "not_found"}, status_code=404)
-    return JSONResponse({
-        "sub": record["sub"],
-        "name": record["name"],
-        "phone": record["phone"],
-        "email": record["email"],
-        "tariff": record["tariff"],
-        "balance_rub": float(record["balance_rub"]),
-        "services": store.subscriber_services(sub),
-    })
+    return JSONResponse(
+        {
+            "sub": record["sub"],
+            "name": record["name"],
+            "phone": record["phone"],
+            "email": record["email"],
+            "tariff": record["tariff"],
+            "balance_rub": float(record["balance_rub"]),
+            "services": store.subscriber_services(sub),
+        }
+    )
 
 
 async def crm_tariffs(request: Request) -> JSONResponse:
@@ -53,7 +56,9 @@ async def crm_toggle_service(request: Request) -> JSONResponse:
     """POST /mock/crm/toggle-service {"sub", "service", "enabled"} — услуга вкл/выкл."""
     body = await request.json()
     result = store.toggle_service(
-        body.get("sub", ""), body.get("service", ""), bool(body.get("enabled", True))
+        body.get("sub", ""),
+        body.get("service", ""),
+        bool(body.get("enabled", True)),
     )
     return JSONResponse(result)
 
@@ -104,7 +109,11 @@ async def admin_reset(request: Request) -> JSONResponse:
 async def admin_billing_quota(request: Request) -> JSONResponse:
     """POST /mock/admin/billing-quota {"sub", "remaining"} — остаток дневного лимита."""
     body = await request.json()
-    return JSONResponse(store.set_daily_quota(body.get("sub", ""), int(body.get("remaining", 0))))
+    return JSONResponse(
+        store.set_daily_quota(
+            body.get("sub", ""), int(body.get("remaining", 0))
+        )
+    )
 
 
 async def admin_counts(request: Request) -> JSONResponse:
@@ -119,10 +128,16 @@ def mock_routes() -> list[Route]:
         Route("/mock/crm/contacts", crm_contacts, methods=["POST"]),
         Route("/mock/crm/toggle-service", crm_toggle_service, methods=["POST"]),
         Route("/mock/billing/charges", billing_charges, methods=["GET"]),
-        Route("/mock/billing/tariff-change", billing_tariff_change, methods=["POST"]),
+        Route(
+            "/mock/billing/tariff-change",
+            billing_tariff_change,
+            methods=["POST"],
+        ),
         Route("/mock/tickets", tickets_list, methods=["GET"]),
         Route("/mock/tickets/create", tickets_create, methods=["POST"]),
         Route("/mock/admin/reset", admin_reset, methods=["POST"]),
-        Route("/mock/admin/billing-quota", admin_billing_quota, methods=["POST"]),
+        Route(
+            "/mock/admin/billing-quota", admin_billing_quota, methods=["POST"]
+        ),
         Route("/mock/admin/counts", admin_counts, methods=["GET"]),
     ]

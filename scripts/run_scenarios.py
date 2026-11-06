@@ -8,15 +8,15 @@
 проверяет ожидания; состояние моков (тариф, услуги, тикеты) сверяется
 после хода. Перед каждым сценарием моки сбрасываются.
 """
+
 from __future__ import annotations
 
 import asyncio
 import sys
 from pathlib import Path
 
-import yaml
-
 import httpx2
+import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -30,40 +30,62 @@ def client() -> httpx2.AsyncClient:
     return httpx2.AsyncClient(trust_env=False, timeout=300)
 
 
-async def chat_turn(c: httpx2.AsyncClient, session_id: str, message: str) -> list[dict]:
+async def chat_turn(
+    http: httpx2.AsyncClient, session_id: str, message: str
+) -> list[dict]:
     """Один ход по SSE → список событий."""
     events: list[dict] = []
-    async with c.stream(
-        "POST", f"{config.BACKEND_URL}/api/chat",
+    async with http.stream(
+        "POST",
+        f"{config.BACKEND_URL}/api/chat",
         json={"session_id": session_id, "message": message},
-    ) as r:
+    ) as response:
         buf = ""
-        async for chunk in r.aiter_text():
+        async for chunk in response.aiter_text():
             buf += chunk
             while "\n\n" in buf:
                 raw, buf = buf.split("\n\n", 1)
-                line = next((l for l in raw.split("\n") if l.startswith("data: ")), None)
+                line = next(
+                    (
+                        sse_line
+                        for sse_line in raw.split("\n")
+                        if sse_line.startswith("data: ")
+                    ),
+                    None,
+                )
                 if line:
                     import json
 
                     events.append(json.loads(line[6:]))
-    return [e for e in events if e.get("type") != "done"]
+    return [event for event in events if event.get("type") != "done"]
 
 
 def _get_text(events: list[dict]) -> str:
-    replies = [e.get("text", "") for e in events if e.get("type") == "reply"]
+    replies = [
+        event.get("text", "")
+        for event in events
+        if event.get("type") == "reply"
+    ]
     return "\n".join(replies)
 
 
-async def check_expectations(c: httpx2.AsyncClient, scenario: dict, turn_events: list[dict]) -> tuple[bool, str]:
+async def check_expectations(
+    http: httpx2.AsyncClient, scenario: dict, turn_events: list[dict]
+) -> tuple[bool, str]:
     """Ожидания реплики — по событиям этого хода; состояние — по мокам сейчас."""
     expect = scenario.get("expect", {}) or {}
-    plan_events = [e for e in turn_events if e.get("type") == "plan"]
-    cards = [e for e in turn_events if e.get("type") == "card"]
+    plan_events = [
+        event for event in turn_events if event.get("type") == "plan"
+    ]
+    cards = [event for event in turn_events if event.get("type") == "card"]
     text = _get_text(turn_events)
 
     for token in expect.get("plan_has", []) or []:
-        if not any(token in a for e in plan_events for a in e.get("agents", [])):
+        if not any(
+            token in agent
+            for event in plan_events
+            for agent in event.get("agents", [])
+        ):
             return False, f"в плане нет «{token}»"
     if "card" in expect:
         if expect["card"] and not cards:
@@ -80,39 +102,57 @@ async def check_expectations(c: httpx2.AsyncClient, scenario: dict, turn_events:
     state = expect.get("state", {}) or {}
     if "tariff" in state:
         sub = state.get("sub", "u_4f2a")
-        r = await c.get(f"{config.STAND_URL}/mock/crm/subscriber?sub={sub}")
-        actual = r.json().get("tariff")
+        response = await http.get(
+            f"{config.STAND_URL}/mock/crm/subscriber?sub={sub}"
+        )
+        actual = response.json().get("tariff")
         if actual != state["tariff"]:
             return False, f"тариф {sub}: {actual}, ожидался {state['tariff']}"
     if "service" in state:
         svc = state["service"]
-        r = await c.get(f"{config.STAND_URL}/mock/crm/subscriber?sub=u_4f2a")
-        row = next((s for s in r.json().get("services", []) if s["service"] == svc["name"]), None)
+        response = await http.get(
+            f"{config.STAND_URL}/mock/crm/subscriber?sub=u_4f2a"
+        )
+        row = next(
+            (
+                subscriber_service
+                for subscriber_service in response.json().get("services", [])
+                if subscriber_service["service"] == svc["name"]
+            ),
+            None,
+        )
         actual = row["enabled"] if row else False
         if actual != svc["enabled"]:
-            return False, f"услуга {svc['name']}={actual}, ожидалось {svc['enabled']}"
+            return (
+                False,
+                f"услуга {svc['name']}={actual}, ожидалось {svc['enabled']}",
+            )
     if "tickets_min" in state:
-        r = await c.get(f"{config.STAND_URL}/mock/tickets?sub=u_4f2a")
-        if len(r.json().get("tickets", [])) < state["tickets_min"]:
+        response = await http.get(f"{config.STAND_URL}/mock/tickets?sub=u_4f2a")
+        if len(response.json().get("tickets", [])) < state["tickets_min"]:
             return False, f"тикетов меньше {state['tickets_min']}"
     return True, ""
 
 
-async def run_scenario(c: httpx2.AsyncClient, path: Path) -> None:
+async def run_scenario(http: httpx2.AsyncClient, path: Path) -> None:
     scenario = yaml.safe_load(path.read_text(encoding="utf-8"))
     name = scenario.get("name", path.stem)
-    await c.post(f"{config.STAND_URL}/mock/admin/reset")
+    await http.post(f"{config.STAND_URL}/mock/admin/reset")
 
-    r = await c.post(f"{config.BACKEND_URL}/api/session", json={"user": scenario["user"]})
-    session_id = r.json()["session_id"]
+    response = await http.post(
+        f"{config.BACKEND_URL}/api/session", json={"user": scenario["user"]}
+    )
+    session_id = response.json()["session_id"]
 
     all_events: list[dict] = []
     for turn in scenario["turns"]:
-        events = await chat_turn(c, session_id, turn["say"])
+        events = await chat_turn(http, session_id, turn["say"])
         all_events.extend(events)
-        ok, why = await check_expectations(c, turn, events)
+        ok, why = await check_expectations(http, turn, events)
         if not ok:
-            RESULTS.append((name, False, f"реплика «{turn['say'][:40]}»: {why}"))
+            RESULTS.append(
+                (name, False, f"реплика «{turn['say'][:40]}»: {why}")
+            )
             return
 
     RESULTS.append((name, True, ""))
@@ -121,22 +161,24 @@ async def run_scenario(c: httpx2.AsyncClient, path: Path) -> None:
 async def main() -> int:
     wanted = sys.argv[1:]
     files = sorted(DIALOGS.glob("*.yaml"))
-    async with client() as c:
+    async with client() as http:
         for path in files:
-            if wanted and not any(path.stem.startswith(w) for w in wanted):
+            if wanted and not any(
+                path.stem.startswith(prefix) for prefix in wanted
+            ):
                 continue
             try:
-                await run_scenario(c, path)
-            except Exception as e:  # noqa: BLE001
+                await run_scenario(http, path)
+            except Exception as error:  # noqa: BLE001
                 import traceback
 
                 traceback.print_exc()
-                RESULTS.append((path.stem, False, repr(e)[:160]))
+                RESULTS.append((path.stem, False, repr(error)[:160]))
 
     print("\n──── матрица сценариев ────")
     for name, ok, why in RESULTS:
         print(f"[{'ok ' if ok else 'FAIL'}] {name} {why}")
-    failed = [r for r in RESULTS if not r[1]]
+    failed = [result for result in RESULTS if not result[1]]
     print(f"\nитого: {len(RESULTS) - len(failed)}/{len(RESULTS)} зелёные")
     return 1 if failed else 0
 

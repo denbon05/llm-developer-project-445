@@ -23,4 +23,5 @@ TODO(агенты):
 TODO(контракты): POST /api/cards/{pending_id}/decision — кнопка карточки:
   «да» → orchestrator.execute_pending, «нет» → отмена.
 """
+
 from __future__ import annotations

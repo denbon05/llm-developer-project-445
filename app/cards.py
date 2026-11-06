@@ -6,18 +6,36 @@
 о карточке усиливаются политикой Dogwood (Prepare → ConfirmCard →
 Execute) через app.pep — каркас остаётся.
 """
+
 from __future__ import annotations
 
 import json
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from core import config, db
 
-YES = ("да", "ага", "давай", "конечно", "подтверждаю", "подтверди", "верно", "угу", "продолжай")
+YES = (
+    "да",
+    "ага",
+    "давай",
+    "конечно",
+    "подтверждаю",
+    "подтверди",
+    "верно",
+    "угу",
+    "продолжай",
+)
 NO = ("нет", "не надо", "отмена", "отменить", "откажись", "не нужно", "стоп")
-OPERATOR = ("оператор", "человека", "живой человек", "поддержку", "менеджера", "специалиста")
+OPERATOR = (
+    "оператор",
+    "человека",
+    "живой человек",
+    "поддержку",
+    "менеджера",
+    "специалиста",
+)
 
 
 @dataclass
@@ -42,17 +60,24 @@ def create(session, action: str, details: dict, view: dict) -> Card:
             (session.session_id,),
         )
         pending_id = f"p_{uuid.uuid4().hex[:8]}"
-        expires = datetime.now(timezone.utc) + timedelta(seconds=config.CARD_TTL_SEC)
+        expires = datetime.now(UTC) + timedelta(seconds=config.CARD_TTL_SEC)
         cur.execute(
             "insert into pending_cards(pending_id, session_id, sub, action, details, card, expires_at)"
             " values (%s, %s, %s, %s, %s, %s, %s)",
             (
-                pending_id, session.session_id, session.user.sub, action,
-                _json(details), _json(view), expires,
+                pending_id,
+                session.session_id,
+                session.user.sub,
+                action,
+                _json(details),
+                _json(view),
+                expires,
             ),
         )
         conn.commit()
-    card = Card(pending_id, action, details, view, session.session_id, session.user.sub)
+    card = Card(
+        pending_id, action, details, view, session.session_id, session.user.sub
+    )
     session.pending_card = card
     return card
 
@@ -70,9 +95,12 @@ def active(session) -> Card | None:
     if row is None:
         return None
     card = Card(
-        pending_id=row["pending_id"], action=row["action"],
-        details=row["details"], view=row["card"],
-        session_id=session.session_id, sub=row["sub"],
+        pending_id=row["pending_id"],
+        action=row["action"],
+        details=row["details"],
+        view=row["card"],
+        session_id=session.session_id,
+        sub=row["sub"],
     )
     session.pending_card = card
     return card
@@ -80,7 +108,10 @@ def active(session) -> Card | None:
 
 def settle(session, card: Card, state: str) -> None:
     """Закрыть карточку исходом: confirmed / rejected / expired / denied / replaced."""
-    db.execute("update pending_cards set state = %s where pending_id = %s", (state, card.pending_id))
+    db.execute(
+        "update pending_cards set state = %s where pending_id = %s",
+        (state, card.pending_id),
+    )
     if session.pending_card is card or session.pending_card is None:
         session.pending_card = None
 
@@ -88,11 +119,11 @@ def settle(session, card: Card, state: str) -> None:
 def classify_answer(text: str) -> str:
     """Ответ на карточку: yes / no / operator / topic (детерминированный код)."""
     lowered = text.strip().lower()
-    if any(w in lowered for w in YES):
+    if any(word in lowered for word in YES):
         return "yes"
-    if any(w in lowered for w in NO):
+    if any(word in lowered for word in NO):
         return "no"
-    if any(w in lowered for w in OPERATOR):
+    if any(word in lowered for word in OPERATOR):
         return "operator"
     return "topic"  # смена темы: обслуживаем, карточка живёт
 

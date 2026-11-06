@@ -10,18 +10,18 @@
 обновляет их при незнакомом kid — так смена ключа издателем не требует
 перезапуска потребителей. Запрос идёт мимо системного прокси.
 """
+
 from __future__ import annotations
 
 import time
 
+import httpx2
 import jwt
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey
 from jwt.algorithms import RSAAlgorithm
 from mcp.server.auth.provider import AccessToken, TokenVerifier
 
 from core.config import ISSUER_URL
-
-import httpx2
 
 
 class JwkCache:
@@ -34,9 +34,13 @@ class JwkCache:
 
     async def _fetch(self) -> None:
         async with httpx2.AsyncClient(trust_env=False, timeout=10) as client:
-            r = await client.get(self.jwks_url)
-            r.raise_for_status()
-        self._keys = {k["kid"]: k for k in r.json()["keys"] if k.get("use", "sig") == "sig"}
+            response = await client.get(self.jwks_url)
+            response.raise_for_status()
+        self._keys = {
+            jwk["kid"]: jwk
+            for jwk in response.json()["keys"]
+            if jwk.get("use", "sig") == "sig"
+        }
         self._fetched_at = time.monotonic()
 
     async def get(self, kid: str | None) -> dict:
@@ -44,7 +48,9 @@ class JwkCache:
             await self._fetch()
         if kid is None and len(self._keys) == 1:  # токен без kid, ключ один
             return next(iter(self._keys.values()))
-        return self._keys.get(kid, {}) if kid else {}  # {} → подпись не проверить → 401
+        return (
+            self._keys.get(kid, {}) if kid else {}
+        )  # {} → подпись не проверить → 401
 
 
 class JwtVerifier(TokenVerifier):
@@ -71,7 +77,9 @@ class JwtVerifier(TokenVerifier):
             if not key:
                 return None
             public_key = RSAAlgorithm.from_jwk(key)
-            if not isinstance(public_key, RSAPublicKey):  # JWKS publishes public keys only
+            if not isinstance(
+                public_key, RSAPublicKey
+            ):  # JWKS publishes public keys only
                 return None
             claims = jwt.decode(
                 token,
