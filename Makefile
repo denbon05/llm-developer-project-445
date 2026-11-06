@@ -1,10 +1,10 @@
-.PHONY: help install setup test infra migrate seed stand api actions pdp guardrail snapshot smoke scenarios reset
+.PHONY: help install setup test lint format infra migrate seed stand api actions pdp guardrail snapshot smoke scenarios reset
 
 # Группа smoke-проверок: make smoke G=0. Без G прогоняются все группы.
 G ?=
 
 help:
-	@echo "make install    - зависимости из requirements.txt"
+	@echo "make install    - зависимости (uv sync)"
 	@echo "make setup      - зависимости, схема и демо-данные (база должна быть поднята)"
 	@echo "make infra      - postgres+pgvector (docker compose)"
 	@echo "make migrate    - применить db/*.sql"
@@ -18,46 +18,59 @@ help:
 	@echo "make smoke      - проверки по шагам, группа: make smoke G=0"
 	@echo "make scenarios  - диалоговые сценарии на живой LLM      [сценарии]"
 	@echo "make reset      - вернуть демо-данные моков в исходное"
+	@echo "make lint       - ruff + pylint (короткие имена), F=<файлы>"
+	@echo "make format     - ruff: автоисправления и форматирование, F=<файлы>"
 
 install:
-	python -m pip install -r requirements.txt
+	uv sync --frozen
 
 setup: install migrate seed
 
 test: smoke
 
+# Template code is not reformatted wholesale: lint the files a step touches.
+F ?= .
+lint:
+	uv run ruff check $(F)
+	uv run ruff format --check $(F)
+	uv run pylint $(F)
+
+format:
+	uv run ruff check --fix-only $(F)
+	uv run ruff format $(F)
+
 infra:
 	docker compose -p operator-chat-ai up -d
 
 migrate:
-	python -m core.db migrate
+	uv run python -m core.db migrate
 
 seed:
-	python -m core.seed
+	uv run python -m core.seed
 
 stand:
-	uvicorn --factory stand:build_app --host 127.0.0.1 --port 8100 --log-level warning
+	uv run uvicorn --factory stand:build_app --host 127.0.0.1 --port 8100 --log-level warning
 
 api:
-	uvicorn app.main:app --host 127.0.0.1 --port 8000 --log-level warning
+	uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --log-level warning
 
 actions:
-	uvicorn actions.server:app --host 127.0.0.1 --port 8220 --log-level warning
+	uv run uvicorn actions.server:app --host 127.0.0.1 --port 8220 --log-level warning
 
 pdp:
-	uvicorn --factory pdp.service:build_app --host 127.0.0.1 --port 9100 --log-level warning
+	uv run uvicorn --factory pdp.service:build_app --host 127.0.0.1 --port 9100 --log-level warning
 
 guardrail:
-	uvicorn --factory guardrail.service:build_app --host 127.0.0.1 --port 8300 --log-level warning
+	uv run uvicorn --factory guardrail.service:build_app --host 127.0.0.1 --port 8300 --log-level warning
 
 snapshot:
-	python -m kb.build_snapshot
+	uv run python -m kb.build_snapshot
 
 smoke:
-	PYTHONPATH=. python tests/smoke.py $(G)
+	uv run python -m tests.smoke $(G)
 
 scenarios:
-	python scripts/run_scenarios.py
+	uv run python -m scripts.run_scenarios
 
 reset:
 	curl -s -X POST http://127.0.0.1:8100/mock/admin/reset

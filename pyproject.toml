@@ -1,0 +1,55 @@
+[project]
+name = "telco-support-agent"
+version = "0.1.0"
+description = "Policy-gated multi-agent support chat for a telecom operator"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "openai-agents==0.22.3",
+    "mcp==2.2.0",
+    "pyjwt[crypto]==2.15.1",
+    "fastapi==0.141.1",
+    "uvicorn==0.54.0",
+    "starlette==1.7.0",
+    "pydantic==2.13.5",
+    "python-dotenv==1.2.3",
+    "pyyaml==6.0.3",
+    "psycopg[binary]==3.3.6",
+    "httpx2==2.16.0",
+    "dogwood-py==0.0.12",
+]
+
+[dependency-groups]
+dev = [
+    "basedpyright",
+    "pylint",
+    "ruff",
+]
+
+[tool.uv]
+package = false
+
+[tool.basedpyright]
+venvPath = "."
+venv = ".venv"
+typeCheckingMode = "standard"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+
+[tool.ruff.lint.isort]
+known-first-party = ["actions", "app", "core", "guardrail", "kb", "pdp", "services", "tests"]
+
+# pylint runs only for short names; ruff covers everything else.
+[tool.pylint.main]
+ignore = [".venv", ".git"]
+disable = ["all"]
+enable = ["invalid-name"]
+
+[tool.pylint.basic]
+good-names = ["_"]
+variable-rgx = "^_?[a-z][a-z0-9_]+$"
+argument-rgx = "^_?[a-z][a-z0-9_]+$"
+attr-rgx = "^_?[a-z][a-z0-9_]+$"
+inlinevar-rgx = "^_?[a-z][a-z0-9_]+$"
