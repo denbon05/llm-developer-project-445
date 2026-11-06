@@ -16,25 +16,21 @@ from pathlib import Path
 
 import yaml
 
-try:
-    import httpx2 as httpx
-except ImportError:  # pragma: no cover
-    import httpx
+import httpx2
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
 
-from core import config  # noqa: E402
+from core import config
 
 DIALOGS = ROOT / "data" / "dialogs"
 RESULTS: list[tuple[str, bool, str]] = []
 
 
-def client() -> httpx.AsyncClient:
-    return httpx.AsyncClient(trust_env=False, timeout=300)
+def client() -> httpx2.AsyncClient:
+    return httpx2.AsyncClient(trust_env=False, timeout=300)
 
 
-async def chat_turn(c: httpx.AsyncClient, session_id: str, message: str) -> list[dict]:
+async def chat_turn(c: httpx2.AsyncClient, session_id: str, message: str) -> list[dict]:
     """Один ход по SSE → список событий."""
     events: list[dict] = []
     async with c.stream(
@@ -59,7 +55,7 @@ def _get_text(events: list[dict]) -> str:
     return "\n".join(replies)
 
 
-async def check_expectations(c: httpx.AsyncClient, scenario: dict, turn_events: list[dict]) -> tuple[bool, str]:
+async def check_expectations(c: httpx2.AsyncClient, scenario: dict, turn_events: list[dict]) -> tuple[bool, str]:
     """Ожидания реплики — по событиям этого хода; состояние — по мокам сейчас."""
     expect = scenario.get("expect", {}) or {}
     plan_events = [e for e in turn_events if e.get("type") == "plan"]
@@ -102,7 +98,7 @@ async def check_expectations(c: httpx.AsyncClient, scenario: dict, turn_events: 
     return True, ""
 
 
-async def run_scenario(c: httpx.AsyncClient, path: Path) -> None:
+async def run_scenario(c: httpx2.AsyncClient, path: Path) -> None:
     scenario = yaml.safe_load(path.read_text(encoding="utf-8"))
     name = scenario.get("name", path.stem)
     await c.post(f"{config.STAND_URL}/mock/admin/reset")

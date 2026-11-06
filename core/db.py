@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import sys
-from pathlib import Path
+from typing import LiteralString
 
 import psycopg
 
@@ -26,7 +26,8 @@ def migrate() -> list[str]:
     applied = []
     with connect() as conn, conn.cursor() as cur:
         for sql_file in sorted(DB_DIR.glob("*.sql")):
-            cur.execute(sql_file.read_text(encoding="utf-8"))
+            # Migration files are trusted SQL from this repository, not user input.
+            cur.execute(sql_file.read_text(encoding="utf-8"))  # pyright: ignore[reportCallIssue, reportArgumentType]
             applied.append(sql_file.name)
         conn.commit()
     return applied
@@ -39,19 +40,19 @@ def _plain(row: tuple) -> tuple:
     return tuple(float(x) if isinstance(x, Decimal) else x for x in row)
 
 
-def fetchall(sql: str, params: tuple = ()) -> list[dict]:
+def fetchall(sql: LiteralString, params: tuple = ()) -> list[dict]:
     with connect() as conn, conn.cursor() as cur:
         cur.execute(sql, params)
         cols = [d.name for d in cur.description or []]
         return [dict(zip(cols, _plain(row))) for row in cur.fetchall()]
 
 
-def fetchone(sql: str, params: tuple = ()) -> dict | None:
+def fetchone(sql: LiteralString, params: tuple = ()) -> dict | None:
     rows = fetchall(sql, params)
     return rows[0] if rows else None
 
 
-def execute(sql: str, params: tuple = ()) -> None:
+def execute(sql: LiteralString, params: tuple = ()) -> None:
     with connect() as conn, conn.cursor() as cur:
         cur.execute(sql, params)
         conn.commit()

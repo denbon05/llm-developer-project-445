@@ -14,10 +14,7 @@ from __future__ import annotations
 
 import jwt as pyjwt
 
-try:
-    import httpx2 as httpx
-except ImportError:  # pragma: no cover
-    import httpx
+import httpx2
 
 from core import config
 
@@ -56,7 +53,7 @@ class Tokens:
 
     async def _request(self, resource_key: str, ttl_sec: int) -> None:
         resource = config.RESOURCES[resource_key]
-        async with httpx.AsyncClient(trust_env=False, timeout=10) as client:
+        async with httpx2.AsyncClient(trust_env=False, timeout=10) as client:
             r = await client.post(
                 f"{config.ISSUER_URL}/token",
                 json={"resource": resource, "user": self.user_name, "ttl_sec": ttl_sec},

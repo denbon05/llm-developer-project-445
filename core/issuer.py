@@ -15,9 +15,9 @@ from __future__ import annotations
 import time
 
 import jwt
+from jwt.algorithms import RSAAlgorithm
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
-from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
@@ -35,7 +35,7 @@ _PRIVATE_PEM = _private_key.private_bytes(
     encryption_algorithm=serialization.NoEncryption(),
 )
 
-_PUBLIC_JWK: dict = jwt.algorithms.RSAAlgorithm.to_jwk(_private_key.public_key(), as_dict=True)
+_PUBLIC_JWK: dict = RSAAlgorithm.to_jwk(_private_key.public_key(), as_dict=True)
 _PUBLIC_JWK.update({"kid": KID, "alg": "RS256", "use": "sig"})
 
 

@@ -15,14 +15,13 @@ from __future__ import annotations
 import time
 
 import jwt
+from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey
+from jwt.algorithms import RSAAlgorithm
 from mcp.server.auth.provider import AccessToken, TokenVerifier
 
 from core.config import ISSUER_URL
 
-try:
-    import httpx2 as httpx
-except ImportError:  # pragma: no cover
-    import httpx
+import httpx2
 
 
 class JwkCache:
@@ -34,7 +33,7 @@ class JwkCache:
         self._fetched_at = 0.0
 
     async def _fetch(self) -> None:
-        async with httpx.AsyncClient(trust_env=False, timeout=10) as client:
+        async with httpx2.AsyncClient(trust_env=False, timeout=10) as client:
             r = await client.get(self.jwks_url)
             r.raise_for_status()
         self._keys = {k["kid"]: k for k in r.json()["keys"] if k.get("use", "sig") == "sig"}
@@ -45,7 +44,7 @@ class JwkCache:
             await self._fetch()
         if kid is None and len(self._keys) == 1:  # токен без kid, ключ один
             return next(iter(self._keys.values()))
-        return self._keys.get(kid, {})  # {} → подпись не проверить → 401
+        return self._keys.get(kid, {}) if kid else {}  # {} → подпись не проверить → 401
 
 
 class JwtVerifier(TokenVerifier):
@@ -71,15 +70,17 @@ class JwtVerifier(TokenVerifier):
             key = await self.jwks.get(header.get("kid"))
             if not key:
                 return None
-            public_pem = jwt.algorithms.RSAAlgorithm.from_jwk(key)
+            public_key = RSAAlgorithm.from_jwk(key)
+            if not isinstance(public_key, RSAPublicKey):  # JWKS publishes public keys only
+                return None
             claims = jwt.decode(
                 token,
-                key=public_pem,
+                key=public_key,
                 algorithms=["RS256"],
                 audience=self.resource,
                 issuer=ISSUER_URL,
             )
-        except (jwt.PyJWTError, httpx.HTTPError):
+        except (jwt.PyJWTError, httpx2.HTTPError):
             # кривой токен или недоступна публикация ключей — вызов не обслуживается
             return None
         return claims
@@ -109,13 +110,14 @@ def make_mcp_server(name: str, *, resource: str, instructions: str = ""):
     """
     from mcp.server import MCPServer
     from mcp.server.auth.settings import AuthSettings
+    from pydantic import AnyHttpUrl
 
     server = MCPServer(
         name=name,
         instructions=instructions or None,
         auth=AuthSettings(
-            issuer_url=ISSUER_URL,
-            resource_server_url=resource,
+            issuer_url=AnyHttpUrl(ISSUER_URL),
+            resource_server_url=AnyHttpUrl(resource),
             validate_token_resource=True,
         ),
         token_verifier=JwtVerifier(resource),

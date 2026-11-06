@@ -82,17 +82,14 @@ def setup_model() -> str:
     if not base_url or not model_name:
         raise SystemExit("Нет LLM_BASE_URL/LLM_MODEL: скопируйте .env.example в .env и заполните")
 
-    try:
-        import httpx2 as httpx
-    except ImportError:  # pragma: no cover
-        import httpx
+    import httpx2
     from agents import set_default_openai_api, set_default_openai_client, set_tracing_disabled
     from openai import AsyncOpenAI
 
     client = AsyncOpenAI(
         base_url=base_url,
         api_key=os.environ.get("LLM_API_KEY", "none"),
-        http_client=httpx.AsyncClient(trust_env=False, timeout=180),
+        http_client=httpx2.AsyncClient(trust_env=False, timeout=180),
     )
     set_default_openai_client(client, use_for_tracing=False)
     set_default_openai_api("chat_completions")

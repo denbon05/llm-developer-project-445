@@ -12,10 +12,7 @@ from __future__ import annotations
 import asyncio
 import sys
 
-try:
-    import httpx2 as httpx
-except ImportError:  # pragma: no cover
-    import httpx
+import httpx2
 
 from core import config
 
@@ -30,8 +27,8 @@ def check(group: str, name: str, ok: bool, detail: str = "") -> None:
     print(f"[{mark}] {group}/{name} {detail}")
 
 
-def _client() -> httpx.AsyncClient:
-    return httpx.AsyncClient(trust_env=False, timeout=15)
+def _client() -> httpx2.AsyncClient:
+    return httpx2.AsyncClient(trust_env=False, timeout=15)
 
 
 async def group_0_stand() -> None:

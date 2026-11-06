@@ -12,10 +12,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-try:
-    import httpx2 as httpx
-except ImportError:  # pragma: no cover
-    import httpx
+import httpx2
 
 KB_DIR = Path(__file__).resolve().parent.parent / "data" / "kb"
 OUT_FILE = Path(__file__).resolve().parent / "vectors.json"
@@ -39,7 +36,7 @@ def read_articles() -> list[dict]:
 
 
 def embed(texts: list[str]) -> list[list[float]]:
-    with httpx.Client(trust_env=False, timeout=120) as client:
+    with httpx2.Client(trust_env=False, timeout=120) as client:
         r = client.post(
             EMBED_URL,
             json={"model": EMBED_MODEL, "input": texts},

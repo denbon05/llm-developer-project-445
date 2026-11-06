@@ -34,7 +34,6 @@ JWT, который backend уже получил у издателя (дове�
 """
 from __future__ import annotations
 
-import json
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -73,7 +72,7 @@ def _audit(session_id: str, sub: str, action: str, decision: str, reason: str) -
 class Session:
     session_id: str
     subject: dict
-    authorizer: object = None
+    authorizer: native.NativeAuthorizer
     cards: dict[str, dict] = field(default_factory=dict)        # pending_id → {action, ts}
     confirmations: dict[str, dict] = field(default_factory=dict)
     execute_requests: int = 0
@@ -137,7 +136,7 @@ class PolicyService:
         сервис.
         """
         s = self._session(session_id)
-        pending_id = payload.get("pending_id")
+        pending_id = payload.get("pending_id") or ""
         card = s.cards.get(pending_id)
         if card is None:
             result = {"decision": "Deny", "reason": "card_not_prepared"}

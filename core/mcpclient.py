@@ -14,13 +14,11 @@ from __future__ import annotations
 
 import json
 
-try:
-    import httpx2 as httpx
-except ImportError:  # pragma: no cover
-    import httpx
+import httpx2
 
 from agents.mcp import MCPServerStreamableHttp
 from mcp.shared.exceptions import MCPError
+from mcp.types import TextContent, Tool
 
 from core import config
 
@@ -29,7 +27,7 @@ FORBIDDEN_CODE = -32003
 
 def _client_factory(headers=None, timeout=None, auth=None, **kwargs):
     """httpx-клиент соединения: мимо системного прокси (trust_env=False)."""
-    return httpx.AsyncClient(headers=headers, timeout=timeout, auth=auth, trust_env=False)
+    return httpx2.AsyncClient(headers=headers, timeout=timeout, auth=auth, trust_env=False)
 
 
 class McpPool:
@@ -39,7 +37,7 @@ class McpPool:
         self.tokens = tokens
         self.resource_keys = resource_keys
         self._servers: dict[str, MCPServerStreamableHttp] = {}
-        self._tools: dict[str, tuple[str, object]] = {}  # имя → (resource_key, Tool)
+        self._tools: dict[str, tuple[str, Tool]] = {}  # имя → (resource_key, Tool)
 
     async def connect(self) -> None:
         for key in self.resource_keys:
@@ -76,7 +74,7 @@ class McpPool:
 
     def tool_schema(self, name: str) -> dict:
         tool = self._tools[name][1]
-        schema = getattr(tool, "input_schema", None) or tool.inputSchema
+        schema = tool.input_schema
         return dict(schema)
 
     def tool_description(self, name: str) -> str:
@@ -111,7 +109,12 @@ class McpPool:
 
     async def _call_once(self, resource_key: str, tool_name: str, args: dict | None) -> dict:
         result = await self._servers[resource_key].call_tool(tool_name, args or {})
-        text = result.content[0].text if result.content else "{}"
+        if not result.content:
+            text = "{}"
+        elif isinstance(first := result.content[0], TextContent):
+            text = first.text
+        else:
+            raise TypeError(f"{tool_name} returned {type(first).__name__}, expected text")
         try:
             return json.loads(text)
         except (TypeError, ValueError):

@@ -80,6 +80,7 @@ def tariff_changes_today(sub: str) -> int:
         " WHERE sub = %s AND created_at::date = current_date",
         (sub,),
     )
+    assert row is not None  # count(*) always returns a row
     return int(row["n"])
 
 
@@ -115,9 +116,11 @@ def apply_tariff_change(*, sub: str, new_tariff: str, idempotency_key: str) -> d
         if tariff_changes_today(sub) >= DAILY_TARIFF_CHANGE_LIMIT:
             return {"outcome": "daily_limit", "limit": DAILY_TARIFF_CHANGE_LIMIT}
 
-        cur_price = cur.execute(
+        price_row = cur.execute(
             "SELECT price_rub FROM tariffs WHERE name = %s", (current,)
-        ).fetchone()[0]
+        ).fetchone()
+        assert price_row is not None  # subscribers.tariff references tariffs
+        cur_price = price_row[0]
 
         cur.execute("UPDATE subscribers SET tariff = %s WHERE sub = %s", (new_tariff, sub))
         cur.execute(
@@ -166,6 +169,7 @@ def create_ticket(sub: str, subject: str, note: str) -> dict:
         " returning id",
         (sub, subject, note),
     )
+    assert row is not None  # INSERT ... RETURNING always returns a row
     return {"ticket_id": row["id"], "status": "open"}
 
 
@@ -190,5 +194,6 @@ def counts() -> dict:
     out = {}
     for table in ("subscribers", "tariffs", "billing_events", "kb_chunks", "tickets", "audit_log"):
         row = db.fetchone(f"SELECT count(*) AS n FROM {table}")
+        assert row is not None  # count(*) always returns a row
         out[table] = int(row["n"])
     return out

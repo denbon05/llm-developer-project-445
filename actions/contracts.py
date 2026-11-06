@@ -12,7 +12,7 @@ TODO(контракты):
 """
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel  # noqa: F401 -- used once the TODO above is implemented
 
 BUSINESS_RULE_CODES = frozenset()
 

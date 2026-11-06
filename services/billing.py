@@ -21,7 +21,7 @@ billing = make_mcp_server(
 
 def _subject() -> str:
     at = get_access_token()
-    assert at is not None, "инструмент вызван без аутентифицированного токена"
+    assert at is not None and at.subject, "инструмент вызван без аутентифицированного токена"
     return at.subject
 
 
