@@ -42,6 +42,8 @@ PG_DSN = os.environ.get(
     "PG_DSN", "postgresql://operator:operator@127.0.0.1:5434/operator"
 )
 
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
+
 TOKEN_TTL_SEC = int(os.environ.get("TOKEN_TTL_SEC", "3600"))
 CARD_TTL_SEC = int(os.environ.get("CARD_TTL_SEC", "120"))
 BUDGET_RUB = float(os.environ.get("BUDGET_RUB", "50"))

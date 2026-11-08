@@ -9,3 +9,4 @@ nohup.out
 # local dev
 docs/steps
 CLAUDE.local.md
+.mcp-inspector.json

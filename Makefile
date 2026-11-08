@@ -1,4 +1,4 @@
-.PHONY: help install setup test lint format lock infra migrate seed stand api actions pdp guardrail snapshot smoke scenarios reset
+.PHONY: help install setup test lint format infra migrate seed stand api actions pdp guardrail snapshot smoke scenarios reset inspect-mcp
 
 # Группа smoke-проверок: make smoke G=0. Без G прогоняются все группы.
 G ?=
@@ -9,7 +9,7 @@ UV := $(shell command -v uv 2>/dev/null)
 RUN := $(if $(UV),uv run,)
 
 help:
-	@echo "make install    - зависимости (uv sync)"
+	@echo "make install    - зависимости (uv sync) и requirements.txt"
 	@echo "make setup      - зависимости, схема и демо-данные (база должна быть поднята)"
 	@echo "make infra      - postgres+pgvector (docker compose)"
 	@echo "make migrate    - применить db/*.sql"
@@ -25,11 +25,13 @@ help:
 	@echo "make reset      - вернуть демо-данные моков в исходное"
 	@echo "make lint       - ruff + pylint (короткие имена), F=<файлы>"
 	@echo "make format     - ruff: автоисправления и форматирование, F=<файлы>"
-	@echo "make lock       - обновить uv.lock и requirements.txt"
+	@echo "make inspect-mcp - все MCP-серверы в MCP Inspector, LOGIN=<пользователь>"
 
+# requirements.txt follows uv.lock because Hexlet's checker installs from it.
 install:
 ifdef UV
-	uv sync --frozen
+	uv sync
+	uv export --quiet --frozen --no-dev --no-hashes --no-emit-project --format requirements-txt -o requirements.txt
 else
 	python -m pip install -r requirements.txt
 endif
@@ -37,11 +39,6 @@ endif
 setup: install migrate seed
 
 test: smoke
-
-# Keep requirements.txt in sync with uv.lock: Hexlet's checker installs from it.
-lock:
-	uv lock
-	uv export --frozen --no-dev --no-hashes --no-emit-project --format requirements-txt -o requirements.txt
 
 F ?= .
 lint:
@@ -88,3 +85,10 @@ scenarios:
 
 reset:
 	curl -s -X POST http://127.0.0.1:8100/mock/admin/reset
+
+LOGIN ?= anna
+INSPECTOR_CATALOG := .mcp-inspector.json
+
+inspect-mcp:
+	$(RUN) python -m scripts.write_inspector_catalog $(LOGIN) $(INSPECTOR_CATALOG)
+	npx @modelcontextprotocol/inspector@2.13.0 --catalog $(INSPECTOR_CATALOG)

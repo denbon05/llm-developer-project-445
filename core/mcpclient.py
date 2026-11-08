@@ -21,6 +21,9 @@ from mcp.shared.exceptions import MCPError
 from mcp.types import TextContent, Tool
 
 from core import config
+from core.logging import get_logger
+
+logger = get_logger(__name__)
 
 FORBIDDEN_CODE = -32003
 
@@ -103,8 +106,13 @@ class McpPool:
             if getattr(error, "code", None) == FORBIDDEN_CODE:
                 raise  # отказ самого инструмента (например, по роли) — не транспорт
             return await self._recover_and_retry(resource_key, tool_name, args)
-        except Exception:  # noqa: BLE001 -- any other failure counts as transport: reconnect, retry once
-            # Ignored for now (BLE001): log it, then narrow the except.
+        except Exception as error:  # noqa: BLE001 -- any other failure counts as transport: reconnect, retry once
+            logger.warning(
+                "mcp_call_failed_retrying",
+                resource_key=resource_key,
+                tool_name=tool_name,
+                error_type=type(error).__name__,
+            )
             return await self._recover_and_retry(resource_key, tool_name, args)
 
     async def _recover_and_retry(
@@ -115,9 +123,12 @@ class McpPool:
         if old is not None:
             try:
                 await old.__aexit__(None, None, None)
-            except Exception:  # noqa: BLE001, S110 — закрытие не должно ронять сессию
-                # Ignored for now (S110): debug-log it once we have logging.
-                pass
+            except Exception as error:  # noqa: BLE001 -- a failed close must not break the session
+                logger.warning(
+                    "mcp_connection_close_failed",
+                    resource_key=resource_key,
+                    error_type=type(error).__name__,
+                )
         await self._connect(resource_key)
         return await self._call_once(resource_key, tool_name, args)
 
@@ -141,10 +152,13 @@ class McpPool:
             return {"raw": text}
 
     async def close(self) -> None:
-        for server in self._servers.values():
+        for resource_key, server in self._servers.items():
             try:
                 await server.__aexit__(None, None, None)
-            except Exception:  # noqa: BLE001, S110 — закрытие не должно ронять сессию
-                # Ignored for now (S110): debug-log it once we have logging.
-                pass
+            except Exception as error:  # noqa: BLE001 -- a failed close must not break the session
+                logger.warning(
+                    "mcp_connection_close_failed",
+                    resource_key=resource_key,
+                    error_type=type(error).__name__,
+                )
         self._servers.clear()

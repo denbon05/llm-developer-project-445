@@ -47,6 +47,9 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from core import config, db
+from core.logging import get_logger
+
+logger = get_logger(__name__)
 
 ROOT = Path(__file__).resolve().parent
 POLICY_FILE = ROOT / "policies" / "tariff.dw"
@@ -67,9 +70,10 @@ def _audit(
             " values (%s, %s, %s, %s, %s)",
             (session_id, sub, action, decision, reason),
         )
-    except Exception:  # noqa: BLE001, S110 — журнал решений не должен валить сервис
-        # Ignored for now (S110): debug-log it once we have logging.
-        pass
+    except Exception:  # A failed decision log must not bring the service down.
+        logger.exception(
+            "policy_event_write_failed", action=action, decision=decision
+        )
 
 
 @dataclass

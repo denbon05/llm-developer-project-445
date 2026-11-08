@@ -13,7 +13,11 @@ from mcp.server.auth.middleware.auth_context import get_access_token
 
 from core import db
 from core.config import RESOURCES
+from core.logging import get_logger
 from core.server_auth import make_mcp_server
+from kb.build_snapshot import QUERY_PREFIX, embed
+
+logger = get_logger(__name__)
 
 kb = make_mcp_server(
     "kb",
@@ -71,10 +75,11 @@ def search_kb(query: str, limit: int = 2) -> dict:
 def _query_vector(query: str) -> list[float] | None:
     """Вектор запроса считается на лету; без доступной модели — None."""
     try:
-        from kb.build_snapshot import DOC_PREFIX, embed
-
-        return embed([DOC_PREFIX + query])[0]
-    except Exception:  # noqa: BLE001 — стенде без модели ищем лексически
+        return embed([QUERY_PREFIX + query])[0]
+    except Exception as error:  # noqa: BLE001 -- no model: search by words
+        logger.warning(
+            "kb_embedding_unavailable", error_type=type(error).__name__
+        )
         return None
 
 

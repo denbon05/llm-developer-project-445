@@ -22,6 +22,9 @@ from jwt.algorithms import RSAAlgorithm
 from mcp.server.auth.provider import AccessToken, TokenVerifier
 
 from core.config import ISSUER_URL
+from core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class JwkCache:
@@ -75,11 +78,17 @@ class JwtVerifier(TokenVerifier):
             header = jwt.get_unverified_header(token)
             key = await self.jwks.get(header.get("kid"))
             if not key:
+                logger.warning(
+                    "token_rejected",
+                    reason="unknown_kid",
+                    kid=header.get("kid"),
+                )
                 return None
             public_key = RSAAlgorithm.from_jwk(key)
             if not isinstance(
                 public_key, RSAPublicKey
             ):  # JWKS publishes public keys only
+                logger.warning("token_rejected", reason="not_rsa_key")
                 return None
             claims = jwt.decode(
                 token,
@@ -88,9 +97,13 @@ class JwtVerifier(TokenVerifier):
                 audience=self.resource,
                 issuer=ISSUER_URL,
             )
-        except (jwt.PyJWTError, httpx2.HTTPError):
+        except (jwt.PyJWTError, httpx2.HTTPError) as error:
             # кривой токен или недоступна публикация ключей — вызов не обслуживается
+            logger.warning("token_rejected", reason=type(error).__name__)
             return None
+        logger.debug(
+            "token_accepted", sub=claims.get("sub"), aud=claims.get("aud")
+        )
         return claims
 
     async def verify_token(self, token: str) -> AccessToken | None:

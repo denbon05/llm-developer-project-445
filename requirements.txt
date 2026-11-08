@@ -120,6 +120,8 @@ starlette==1.7.0
     #   openai-agents
     #   sse-starlette
     #   telco-support-agent
+structlog==26.1.0
+    # via telco-support-agent
 truststore==0.10.5 ; sys_platform != 'emscripten'
     # via
     #   httpcore2
