@@ -1,4 +1,4 @@
-.PHONY: help install setup test lint format infra migrate seed stand api actions pdp guardrail snapshot smoke scenarios reset inspect-mcp
+.PHONY: actions pdp guardrail
 
 # Группа smoke-проверок: make smoke G=0. Без G прогоняются все группы.
 G ?=
@@ -20,6 +20,7 @@ help:
 	@echo "make pdp        - PDP с политиками Dogwood (:9100)      [права]"
 	@echo "make guardrail  - guardrail-сервис (:8300)              [guardrail]"
 	@echo "make snapshot   - пересчитать векторы базы знаний (нужна LM Studio)"
+	@echo "make test       - модульные тесты (pytest)"
 	@echo "make smoke      - проверки по шагам, группа: make smoke G=0"
 	@echo "make scenarios  - диалоговые сценарии на живой LLM      [сценарии]"
 	@echo "make reset      - вернуть демо-данные моков в исходное"
@@ -38,7 +39,8 @@ endif
 
 setup: install migrate seed
 
-test: smoke
+test:
+	uv run pytest
 
 F ?= .
 lint:

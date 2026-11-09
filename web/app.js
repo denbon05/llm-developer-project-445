@@ -132,5 +132,5 @@ $('form').onsubmit = e => {
   $('text').value = '';
   send(text);
 };
-$('user').onchange = () => { location.reload(); };
+$('user').onchange = () => { log.replaceChildren(); openSession(); };
 if (sessionId === null) openSession();

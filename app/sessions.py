@@ -15,10 +15,20 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+from agents import Agent, TResponseInputItem
 
 from core import config, db
 from core.mcpclient import McpPool
 from core.tokens import Tokens
+
+if TYPE_CHECKING:
+    from app.planner import DroppedStep
+
+# An even number: every turn adds a message and a reply, so the trimmed history
+# still starts with the subscriber.
+PLANNER_HISTORY_LIMIT = 20
 
 
 @dataclass
@@ -27,17 +37,28 @@ class Session:
     user: config.User
     tokens: Tokens
     pool: McpPool
-    thread: list = field(default_factory=list)  # история планировщика
-    trace: list[str] = field(default_factory=list)
+    # The dialogue as the subscriber saw it, for resolving follow-up questions.
+    planner_messages: list[TResponseInputItem] = field(default_factory=list)
+    used_tools: list[str] = field(default_factory=list)
+    dropped_steps: list[DroppedStep] = field(default_factory=list)
     trace_id: str = ""  # сквозной id текущего хода
-    planner: object | None = None  # собирается лениво на первом ходе
+    planner: Agent | None = None  # built on the first turn
     pending_card: object | None = None  # живая карточка подтверждения
     session_id: str = field(
         default_factory=lambda: f"sess_{uuid.uuid4().hex[:8]}"
     )
 
-    def note(self, tool: str) -> None:
-        self.trace.append(tool)
+    def record_tool_use(self, tool: str) -> None:
+        self.used_tools.append(tool)
+
+    def remember_turn(self, message: str, reply: str) -> None:
+        self.planner_messages.extend(
+            [
+                {"role": "user", "content": message},
+                {"role": "assistant", "content": reply},
+            ]
+        )
+        del self.planner_messages[:-PLANNER_HISTORY_LIMIT]
 
 
 SESSIONS: dict[str, Session] = {}

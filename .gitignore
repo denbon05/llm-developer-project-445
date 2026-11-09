@@ -10,3 +10,4 @@ nohup.out
 docs/steps
 CLAUDE.local.md
 .mcp-inspector.json
+.vscode/

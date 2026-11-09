@@ -5,4 +5,5 @@
 - Don't stage or commit. The developer reviews and stages every file.
 - Keep the `Makefile` target names and `.github/workflows/hexlet-check.yml`. The Hexlet autotests depend on them.
 - Text the subscriber sees (replies, cards, refusals) is in Russian, because the tests match it. Mark every other Russian-dependent spot with `# I18N: <what changes>` for the later move to English.
+- Mark a change postponed until after Hexlet's QA with `# POST-QA: <what changes>` at the spot it applies to.
 - After changing dependencies run `make install`: it regenerates `requirements.txt`. Hexlet's checker has no uv: it installs that file with pip and runs the Makefile targets with plain `python`.

@@ -52,7 +52,7 @@ def wrap_mcp_tool(session: Session, name: str) -> FunctionTool:
                 },
                 ensure_ascii=False,
             )
-        session.note(name)
+        session.record_tool_use(name)
         try:
             result = await session.pool.call(
                 session.pool.resource_of(name), name, args

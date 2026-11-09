@@ -13,8 +13,10 @@ def configure_logging() -> None:
         processors=[
             structlog.contextvars.merge_contextvars,
             structlog.processors.add_log_level,
-            structlog.processors.TimeStamper(fmt="iso"),
-            structlog.dev.ConsoleRenderer(),
+            # simple local ts
+            structlog.processors.TimeStamper(fmt="%H:%M:%S", utc=False),
+            # no padding
+            structlog.dev.ConsoleRenderer(pad_event_to=0, pad_level=False),
         ],
         wrapper_class=structlog.make_filtering_bound_logger(config.LOG_LEVEL),
     )

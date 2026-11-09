@@ -7,8 +7,8 @@ after the subscriber confirms a card that shows exactly what will change.
 
 [![hexlet-check](https://github.com/denbon05/llm-developer-project-445/actions/workflows/hexlet-check.yml/badge.svg)](https://github.com/denbon05/llm-developer-project-445/actions)
 
-> **Status:** in development. The stand and the checks run; the agents,
-> actions, policies and guardrail are being built step by step.
+> **Status:** in development. The stand, the checks and the read-only agents
+> run; actions, policies and the guardrail are being built step by step.
 
 ## Highlights
 
@@ -45,7 +45,8 @@ flowchart LR
 
 The stand (port 8100) hosts the web chat, the read-only MCP servers, the REST
 mocks of the carrier's systems and the token issuer. Everything else talks to
-it the way it would talk to real business systems.
+it the way it would talk to real business systems. Terms are explained in the
+[glossary](docs/glossary.md).
 
 ## Stack
 
@@ -82,6 +83,7 @@ pick a demo user:
 
 ## Testing
 
+- `make test` runs the unit tests; they need no services.
 - `make smoke` runs checks that need no model, grouped by component:
   `make smoke G=0` checks the stand.
 - `make scenarios` runs end-to-end dialogs from `data/dialogs/` on a live model.

@@ -7,3 +7,4 @@ later.
 | Step | Spec | Smoke | Status |
 | --- | --- | --- | --- |
 | 1 | [Stand and logging](01-stand.md) | G=0 | done |
+| 2 | [Orchestrator](02-orchestrator.md) | G=1 | done |

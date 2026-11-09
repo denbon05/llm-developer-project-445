@@ -70,6 +70,7 @@ class User:
 # Демо-пользователи стенда (паролей нет: аутентификация вне рамок проекта).
 # anna — клиент с правом менять тарифы; boris — клиент только на чтение;
 # olga — оператор поддержки.
+# POST-QA: rename the demo users so the login shows the role.
 USERS: dict[str, User] = {
     "anna": User(
         "anna",
@@ -114,6 +115,8 @@ def setup_model() -> str:
     client = AsyncOpenAI(
         base_url=base_url,
         api_key=os.environ.get("LLM_API_KEY", "none"),
+        # Retries network errors, 408, 409, 429 and 5xx with jittered backoff.
+        max_retries=2,
         http_client=httpx2.AsyncClient(trust_env=False, timeout=180),
     )
     set_default_openai_client(client, use_for_tracing=False)
