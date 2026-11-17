@@ -1,8 +1,4 @@
-"""HTTP boundary of the chat: sessions and the SSE stream of a turn.
-
-TODO(контракты): POST /api/cards/{pending_id}/decision — кнопка карточки:
-  «да» → orchestrator.execute_pending, «нет» → отмена.
-"""
+"""HTTP boundary of the chat: sessions, the SSE stream of a turn, card buttons."""
 
 from __future__ import annotations
 
@@ -12,6 +8,7 @@ import traceback
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,6 +16,8 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from app import messages, orchestrator, sessions
+from app.answers import CardAnswer
+from app.cards import CardState
 from app.sessions import Session
 from core import config
 from core.logging import get_logger
@@ -39,6 +38,13 @@ class SessionRequest(BaseModel):
 class ChatRequest(BaseModel):
     session_id: str
     message: str
+
+
+class DecisionRequest(BaseModel):
+    """A press of a card button."""
+
+    session_id: str
+    answer: Literal["yes", "no"]
 
 
 @asynccontextmanager
@@ -129,7 +135,7 @@ async def open_session(request: SessionRequest) -> JSONResponse:
             "session_id": session.session_id,
             "name": session.user.name,
             "role": session.user.role,
-            "visible_tools": session.pool.tool_names(),
+            "visible_tools": session.mcp.tool_names(),
         }
     )
 
@@ -143,3 +149,27 @@ async def chat(request: ChatRequest) -> StreamingResponse:
         else stream_unknown_session()
     )
     return StreamingResponse(events, media_type="text/event-stream")
+
+
+@app.post("/api/cards/{pending_id}/decision")
+async def decide_card(
+    pending_id: str, request: DecisionRequest
+) -> JSONResponse:
+    """Confirm or cancel a card and return the reply text."""
+    session = sessions.get(request.session_id)
+    answer = CardAnswer(request.answer)
+    reply = (
+        await orchestrator.decide_card(session, pending_id, answer)
+        if session is not None
+        else None
+    )
+    if reply is None:
+        # The web chat shows `text` whatever the status.
+        return JSONResponse(
+            {"text": messages.CARD_NOT_FOUND, "outcome": "not_found"},
+            status_code=404,
+        )
+    outcome = (
+        CardState.CONFIRMED if answer is CardAnswer.YES else CardState.REJECTED
+    )
+    return JSONResponse({"text": reply, "outcome": str(outcome)})

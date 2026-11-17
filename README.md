@@ -84,6 +84,7 @@ pick a demo user:
 ## Testing
 
 - `make test` runs the unit tests; they need no services.
+- `make test-integration` runs the tests that use the database. It needs Docker: a throwaway Postgres starts for the run.
 - `make smoke` runs checks that need no model, grouped by component:
   `make smoke G=0` checks the stand.
 - `make scenarios` runs end-to-end dialogs from `data/dialogs/` on a live model.

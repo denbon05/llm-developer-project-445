@@ -1,14 +1,15 @@
 # 02. Orchestrator
 
 One chat turn for read-only questions: plan, gate, worker agents, editor, SSE.
-Terms: [glossary](../glossary.md).
+Terms: [glossary](../glossary.md). Cards, actions and turns answered by code:
+[03](03-action-contracts.md).
 
 ## Flow
 
 `POST /api/chat` runs `run_turn` in its own task and streams its events.
 
 1. The planner (LLM, no tools) reads the dialogue and returns a `Plan`.
-2. `gate()` (code, no LLM) filters the plan.
+2. `restrict_plan()` (code, no LLM) filters the plan.
 3. Each kept step runs one worker agent, one after another.
 4. The editor (LLM, no tools) writes the reply. Only its text reaches the
    subscriber, except a clarifying question, which skips the agents and the
@@ -41,29 +42,29 @@ answer in their own dialect. An unknown `access_mode` becomes `read`.
 
 The output schema is non-strict: strict mode is too demanding for small models.
 
-Routing knowledge lives in the `CATALOG` descriptions and in a few examples in
+Routing knowledge lives in the `AGENT_SPECS` descriptions and in a few examples in
 the prompt, not in rules about particular questions. Checked against questions
 the prompt was not tuned on, this beat question-specific rules.
 
 ## Gate
 
-`gate()` is a pure function. In order:
+`restrict_plan()` is a pure function. In order:
 
 | Condition | Result | `DropReason` |
 | --- | --- | --- |
 | `question` is set | all steps dropped, the question goes to the subscriber | `clarification_requested` |
-| `agent_id` not in `CATALOG` | step dropped | `unknown_agent` |
+| `agent_id` not in `AGENT_SPECS` | step dropped | `unknown_agent` |
 | Same `agent_id` and `task` as a kept step | step dropped | `duplicate` |
 | 4 steps already kept | step dropped | `too_many_steps` |
-| `agent_id` in `READ_AGENTS` | `access_mode` forced to `read` | none |
+| `agent_id` not in `ACTION_AGENTS` | `access_mode` forced to `read` | none |
 
-`CATALOG` is the single source of agents: the planner prompt is generated from
+`AGENT_SPECS` is the single source of agents: the planner prompt is generated from
 it, so a new entry is known to both.
 
 ## Worker agents and editor
 
 - `data` has `get_my_profile`, `get_my_tariff`, `list_tariffs`,
-  `list_my_charges`. `kb` has `search_kb`.
+  `list_my_charges`. `kb` has `search_kb`. `tariff` and `tickets`: see 03.
 - Tool names live in `ToolName`. `wrap_tools` skips unknown names silently, so a
   unit test checks every name against the MCP servers.
 - Agents get at most `MAX_AGENT_TURNS` (6) LLM calls.
@@ -100,6 +101,7 @@ stay active on the first attempt, so one call becomes 5 requests instead of 3.
 - `dropped_steps`: everything the gate removed, across all turns. It stays on
   the server: the session and the `plan_ready` log line.
 - `trace_id`: the current turn.
+- `turn_lock`: see 03.
 
 ## SSE
 
@@ -108,7 +110,8 @@ Each event is `data: {json}\n\n`.
 | Event | Fields | When |
 | --- | --- | --- |
 | `plan` | `agents` | at least one step is kept |
-| `reply` | `text`, `sources` | the turn produced a reply |
+| `card` | `pending_id`, `card` | the turn created a card, see 03 |
+| `reply` | `text`, `sources` | the turn produced a reply; a turn with a card or a ticket may send several, see 03 |
 | `error` | `detail` | the turn failed or the session is unknown |
 | `done` | none | always last |
 
@@ -135,6 +138,7 @@ middle of an action would leave the action done and unrecorded.
   web chat reads.
 - `POST /api/chat` `{"session_id", "message"}` returns the SSE stream. An unknown
   session gets an `error` event, because the web chat reads only the stream.
+- `POST /api/cards/{pending_id}/decision`: see 03.
 
 ## Logging
 
@@ -170,8 +174,7 @@ response asked for both and the second wrote the report.
 ## Acceptance
 
 - `make test` passes and `make smoke G=1` passes 5/5.
-- Scenario `10_read_tariff` passes on a live model. `30_tariff_change_ok` needs
-  the action agents.
+- Scenario `10_read_tariff` passes on a live model.
 - In the web chat as `anna`, "какой у меня тариф и почему списание 440?" shows
   the plan line, then a reply with the tariff, the rule and its source.
 - After a failed turn, the next message in the same session works.

@@ -1,6 +1,6 @@
 """Planner: proposes which worker agents a turn runs, before anything executes.
 
-The plan is LLM output, so execution doesn't trust it: gate() keeps only what
+The plan is LLM output, so execution doesn't trust it: restrict_plan() keeps only what
 code allows. Changes to a tariff, service or contacts go through a confirmation
 card and the permission policy, never straight from a plan.
 """
@@ -14,14 +14,15 @@ from agents import Agent, TResponseInputItem
 from pydantic import AliasChoices, BaseModel, Field, field_validator
 
 from app.llm import build_agent, run_agent
-from app.workers import CATALOG
+from app.workers import AGENT_SPECS
 
-READ_AGENTS = ("data", "kb")
-# ACTION_AGENTS = ("tariff", "tickets")
+# Only these agents may keep write access.
+ACTION_AGENTS = ("tariff", "tickets")
 MAX_PLAN_STEPS = 4
 
 AGENT_LIST = "\n".join(
-    f"- {agent_id}: {spec.description}" for agent_id, spec in CATALOG.items()
+    f"- {agent_id}: {spec.description}"
+    for agent_id, spec in AGENT_SPECS.items()
 )
 
 # I18N: the language of tasks, of the clarifying question and of the examples.
@@ -56,6 +57,10 @@ Message: можно ли приостановить номер на время �
 {"reasoning": "Вопрос об общих правилах.", "steps": [{"agent_id": "kb", "task": "найти правила приостановки номера", "access_mode": "read"}]}
 Message: почему в этом месяце счёт больше обычного?
 {"reasoning": "Нужны списания абонента и правила начисления.", "steps": [{"agent_id": "data", "task": "показать последние списания", "access_mode": "read"}, {"agent_id": "kb", "task": "найти правила начисления платы", "access_mode": "read"}]}
+Message: хочу перейти на игровой тариф
+{"reasoning": "Абонент просит сменить тариф.", "steps": [{"agent_id": "tariff", "task": "сменить тариф абонента на игровой", "access_mode": "write"}]}
+Message: соедините меня с живым человеком
+{"reasoning": "Абонент просит связать его с сотрудником.", "steps": [{"agent_id": "tickets", "task": "передать обращение оператору: абонент просит связаться с ним", "access_mode": "write"}]}
 Message: спасибо!
 {"reasoning": "Благодарность, агенты не нужны.", "steps": []}
 """
@@ -108,50 +113,62 @@ class DroppedStep:
     reason: DropReason
 
 
-def find_drop_reason(step: Step, kept: list[Step]) -> DropReason | None:
-    """Return why the step can't join the kept ones, or None if it can."""
-    if step.agent_id not in CATALOG:
+def find_drop_reason(
+    step: Step, allowed_steps: list[Step]
+) -> DropReason | None:
+    """Return why the step can't join the allowed ones, or None if it can."""
+    if step.agent_id not in AGENT_SPECS:
         return DropReason.UNKNOWN_AGENT
     if any(
-        step.agent_id == other.agent_id and step.task == other.task
-        for other in kept
+        step.agent_id == allowed_step.agent_id
+        and step.task == allowed_step.task
+        for allowed_step in allowed_steps
     ):
         return DropReason.DUPLICATE
-    if len(kept) >= MAX_PLAN_STEPS:
+    if len(allowed_steps) >= MAX_PLAN_STEPS:
         return DropReason.TOO_MANY_STEPS
     return None
 
 
 def restrict_access(step: Step) -> Step:
-    """Return the step with write access removed from a read-only agent."""
+    """Return the step with write access removed unless its agent may write."""
     # Small models mark steps as writes generously, and a prompt can't fix that.
-    if step.agent_id in READ_AGENTS:
+    if step.agent_id not in ACTION_AGENTS:
         return step.model_copy(update={"access_mode": AccessMode.READ})
     return step
 
 
-def gate(plan: Plan) -> tuple[Plan, list[DroppedStep]]:
+def restrict_plan(plan: Plan) -> tuple[Plan, list[DroppedStep]]:
     """Return the plan code allows and the steps it removed."""
     question = (plan.question or "").strip()
     if question:
-        # The model asks and plans at once even when told not to.
-        dropped = [
+        # A clarifying question wins: nothing runs until the subscriber
+        # answers it. The model asks and plans at once even when told not to,
+        # so every step it added is dropped.
+        dropped_steps = [
             DroppedStep(step.agent_id, DropReason.CLARIFICATION_REQUESTED)
             for step in plan.steps
         ]
         return plan.model_copy(
             update={"steps": [], "question": question}
-        ), dropped
+        ), dropped_steps
 
-    kept: list[Step] = []
-    dropped = []
+    # No question: check the steps one by one, in the model's order. A step is
+    # compared with the ones already allowed, so the first of two duplicates
+    # stays and dropped steps don't count towards the step limit.
+    allowed_steps: list[Step] = []
+    dropped_steps = []
     for step in plan.steps:
-        reason = find_drop_reason(step, kept)
-        if reason is None:
-            kept.append(restrict_access(step))
+        drop_reason = find_drop_reason(step, allowed_steps)
+        if drop_reason is None:
+            # The step will run, with write access only for an action agent.
+            allowed_steps.append(restrict_access(step))
         else:
-            dropped.append(DroppedStep(step.agent_id, reason))
-    return plan.model_copy(update={"steps": kept, "question": None}), dropped
+            dropped_steps.append(DroppedStep(step.agent_id, drop_reason))
+    # A blank question is replaced with None: one value for "no question".
+    return plan.model_copy(
+        update={"steps": allowed_steps, "question": None}
+    ), dropped_steps
 
 
 def build_planner_agent() -> Agent:
@@ -162,7 +179,7 @@ def build_planner_agent() -> Agent:
 async def propose_plan(
     planner: Agent, history: list[TResponseInputItem], message: str
 ) -> Plan:
-    """Return the model's plan for this message, before the gate."""
+    """Return the model's raw plan for the message"""
     run = await run_agent(
         planner, [*history, {"role": "user", "content": message}]
     )

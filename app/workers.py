@@ -3,18 +3,6 @@
 The assistant is built from narrow specialists instead of one agent with every
 tool. Which agent runs is decided by the orchestrator from the plan, never by
 the agents.
-
-TODO(контракты): агенты действий
-  - в CATALOG появляется tariff (prepare_tariff_change +
-    read-инструменты; с правами — ещё prepare_toggle_service и
-    prepare_contacts_update) и tickets (create_ticket);
-  - TARIFF_PROMPT: просьба изменить — ОБЯЗАН первым вызовом вызвать
-    соответствующий prepare_*, пересказать карточку и спросить «да/нет»;
-    сам изменения не исполняет; ошибка prepare_* — данные, не сбой;
-  - TICKETS_PROMPT: без уточняющих вопросов — сразу create_ticket;
-  - у тарифного агента отдельный промпт на случай, когда prepare
-    недоступен пользователю (барьер 1 его скрыл) — «изменения недоступны,
-    предложу оператора».
 """
 
 from __future__ import annotations
@@ -25,7 +13,7 @@ from agents import Agent
 
 from app.llm import build_agent
 from app.sessions import Session
-from app.tools import ToolName
+from app.tools import PREPARE_TOOLS, ToolName
 from app.wrap import wrap_tools
 
 # I18N: the report language.
@@ -53,14 +41,59 @@ base is in Russian.
 """
 
 
+# I18N: the report language and the answers the subscriber must give.
+TARIFF_PROMPT = f"""You are the change agent of a mobile operator's support
+chat. You get one task: a change the subscriber asked for to their tariff, a
+service or their contact details.
+
+- For a change, your first call is the matching tool:
+  {ToolName.PREPARE_TARIFF_CHANGE}, {ToolName.PREPARE_TOGGLE_SERVICE} or
+  {ToolName.PREPARE_CONTACTS_UPDATE}. Pass names as the task gives them.
+- These tools only prepare a confirmation card. You never execute a change and
+  have no tool for it. Never say that anything was changed.
+- An error from a tool is data. With "retryable": true, fix the arguments using
+  the hints in the error and call again, but only when the hints show what the
+  subscriber meant; otherwise report the error and the options it lists. With
+  "retryable": false, report the refusal and its reason.
+- After "card_created", report that the card is ready and the subscriber must
+  answer да or нет.
+- Use the other tools only for facts the task asks about.
+- Write briefly, in Russian. Don't address the subscriber.
+"""
+
+# I18N: the report language.
+TARIFF_NO_ACTIONS_PROMPT = """You are the change agent of a mobile operator's
+support chat. You get one task: a change the subscriber asked for.
+
+- Changes are unavailable in this chat for this subscriber. Report that, and
+  that an operator can help with the change.
+- Never say that anything was changed or will be changed.
+- Use your tools only for facts the task asks about.
+- Write briefly, in Russian. Don't address the subscriber.
+"""
+
+# I18N: the report language and the ticket text language.
+TICKETS_PROMPT = f"""You are the escalation agent of a mobile operator's support
+chat. You get one task: hand the subscriber's request to a human operator.
+
+- Ask nothing. Call {ToolName.CREATE_TICKET} at once with a short subject and a
+  note on what the subscriber needs, both in Russian.
+- Report the ticket_id from the result. If the tool returns an error, report
+  that the ticket was not created.
+- Write briefly, in Russian. Don't address the subscriber.
+"""
+
+
 @dataclass(frozen=True)
 class AgentSpec:
     description: str  # what the planner reads to choose this agent
     prompt: str
     tools: tuple[ToolName, ...]
+    # Used instead of prompt when the session has none of the prepare tools.
+    prompt_without_actions: str | None = None
 
 
-CATALOG: dict[str, AgentSpec] = {
+AGENT_SPECS: dict[str, AgentSpec] = {
     "data": AgentSpec(
         description=(
             "this subscriber's profile, current tariff and charges, "
@@ -82,18 +115,52 @@ CATALOG: dict[str, AgentSpec] = {
         prompt=KB_PROMPT,
         tools=(ToolName.SEARCH_KB,),
     ),
+    # Named after tariffs, but it also changes services and contact details.
+    "tariff": AgentSpec(
+        description=(
+            "changes this subscriber asks for: switching the tariff, turning "
+            "a service on or off, a new contact phone or email; prepares a "
+            "confirmation card"
+        ),
+        prompt=TARIFF_PROMPT,
+        tools=(
+            ToolName.PREPARE_TARIFF_CHANGE,
+            ToolName.PREPARE_TOGGLE_SERVICE,
+            ToolName.PREPARE_CONTACTS_UPDATE,
+            ToolName.GET_MY_TARIFF,
+            ToolName.LIST_TARIFFS,
+            ToolName.GET_MY_PROFILE,
+        ),
+        prompt_without_actions=TARIFF_NO_ACTIONS_PROMPT,
+    ),
+    "tickets": AgentSpec(
+        description=(
+            "hands the request to a human operator by creating a support "
+            "ticket, when the subscriber asks for a person"
+        ),
+        prompt=TICKETS_PROMPT,
+        tools=(ToolName.CREATE_TICKET,),
+    ),
 }
+
+
+def choose_prompt(spec: AgentSpec, session_tools: list[str]) -> str:
+    """Return the agent's prompt for the tools this session has."""
+    if spec.prompt_without_actions and not PREPARE_TOOLS & set(session_tools):
+        return spec.prompt_without_actions
+    return spec.prompt
 
 
 def build_worker_agents(
     session: Session, agent_ids: tuple[str, ...]
 ) -> dict[str, Agent]:
     """Return the requested agents, each with only the tools of its domain."""
+    session_tools = session.mcp.tool_names()
     return {
         agent_id: build_agent(
             agent_id,
-            CATALOG[agent_id].prompt,
-            tools=list(wrap_tools(session, list(CATALOG[agent_id].tools))),
+            choose_prompt(AGENT_SPECS[agent_id], session_tools),
+            tools=list(wrap_tools(session, list(AGENT_SPECS[agent_id].tools))),
         )
         for agent_id in agent_ids
     }

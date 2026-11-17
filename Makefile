@@ -21,6 +21,7 @@ help:
 	@echo "make guardrail  - guardrail-сервис (:8300)              [guardrail]"
 	@echo "make snapshot   - пересчитать векторы базы знаний (нужна LM Studio)"
 	@echo "make test       - модульные тесты (pytest)"
+	@echo "make test-integration - тесты на настоящем Postgres (нужен Docker)"
 	@echo "make smoke      - проверки по шагам, группа: make smoke G=0"
 	@echo "make scenarios  - диалоговые сценарии на живой LLM      [сценарии]"
 	@echo "make reset      - вернуть демо-данные моков в исходное"
@@ -40,7 +41,13 @@ endif
 setup: install migrate seed
 
 test:
-	uv run pytest
+	uv run pytest tests/unit
+
+# Needs Docker: Testcontainers starts a throwaway Postgres.
+# POST-QA: run both folders from `make test`. Until then Hexlet's checker,
+# which may have no Docker, runs only the unit tests.
+test-integration:
+	uv run pytest tests/integration
 
 F ?= .
 lint:
@@ -54,6 +61,10 @@ format:
 
 infra:
 	docker compose -p operator-chat-ai up -d
+
+# Stops the containers and keeps them and their data; `make infra` starts them again.
+infra-stop:
+	docker compose -p operator-chat-ai stop
 
 migrate:
 	$(RUN) python -m core.db migrate

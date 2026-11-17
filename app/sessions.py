@@ -13,6 +13,7 @@ verdikt guardrail хода. Там же функция pep_of(session) — от�
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -36,14 +37,16 @@ class Session:
     login: str
     user: config.User
     tokens: Tokens
-    pool: McpPool
+    mcp: McpPool
     # The dialogue as the subscriber saw it, for resolving follow-up questions.
     planner_messages: list[TResponseInputItem] = field(default_factory=list)
     used_tools: list[str] = field(default_factory=list)
     dropped_steps: list[DroppedStep] = field(default_factory=list)
     trace_id: str = ""  # сквозной id текущего хода
     planner: Agent | None = None  # built on the first turn
-    pending_card: object | None = None  # живая карточка подтверждения
+    # One turn or card decision at a time: two "да" at once must not both
+    # pass the idempotency check before either records its key.
+    turn_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     session_id: str = field(
         default_factory=lambda: f"sess_{uuid.uuid4().hex[:8]}"
     )
@@ -70,11 +73,10 @@ async def open_session(login: str) -> Session:
         raise KeyError(f"неизвестный пользователь: {login}")
 
     tokens = Tokens(login)
-    # TODO(контракты): добавить "actions" — сессия подключится к action-MCP.
-    pool = McpPool(tokens, resource_keys=("crm", "billing", "kb"))
+    pool = McpPool(tokens, resource_keys=("crm", "billing", "kb", "actions"))
     await pool.connect()
 
-    session = Session(login=login, user=user, tokens=tokens, pool=pool)
+    session = Session(login=login, user=user, tokens=tokens, mcp=pool)
     db.execute(
         "insert into sessions(session_id, login, sub) values (%s, %s, %s)",
         (session.session_id, login, user.sub),

@@ -26,6 +26,7 @@ dev = [
     "pylint",
     "pytest",
     "ruff",
+    "testcontainers[postgres]>=4.15.0",
 ]
 
 [tool.uv]

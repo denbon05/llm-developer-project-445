@@ -6,10 +6,13 @@ introduces them.
 | Term | Meaning |
 | --- | --- |
 | Access mode | Whether a plan step only reads data or changes it |
+| Card | A confirmation card: a prepared action the subscriber must confirm before it runs |
 | Dropped step | A plan step the gate removed, with the reason |
 | Editor | The agent that writes the reply from the agents' reports |
 | Gate | Code that checks the plan before anything runs |
+| Idempotency key | `<action>:<pending_id>`: one confirmed card runs its action at most once |
 | JWT, JWKS | A signed access token, and the public keys used to verify it |
+| Live card | A card in state `pending` with time left (`Card.is_live`) |
 | PDP | Policy Decision Point: the service that answers Allow or Deny |
 | PEP | Policy Enforcement Point: code that asks the PDP and obeys the answer |
 | Plan | The planner's proposal: which agents to run and what each must do |
