@@ -216,17 +216,26 @@ def test_no_to_a_confirmed_card_goes_to_the_agents():
     assert fetch_card_state(card) == "confirmed"
 
 
-def test_yes_after_a_failed_execution_retries_the_card():
+@pytest.mark.parametrize(
+    ("failed_execution", "error_type"),
+    [
+        # The action server is down.
+        (RuntimeError("server is down"), "RuntimeError"),
+        # Its answer breaks the contract: it has no outcome.
+        ({"status": "done"}, "ValidationError"),
+    ],
+)
+def test_yes_after_a_failed_execution_retries_the_card(
+    failed_execution, error_type
+):
     """A failure leaves the card pending, so the next "да" runs it again."""
-    mcp_pool = FakeMcpPool(
-        {ToolName.EXECUTE_ACTION: RuntimeError("server is down")}
-    )
+    mcp_pool = FakeMcpPool({ToolName.EXECUTE_ACTION: failed_execution})
     session = make_session(mcp_pool)
     card = create_tariff_card(session)
 
     failed_reply = answer_message(session, "да")
     state_after_failure = fetch_card_state(card)
-    # The action server is back.
+    # The action server answers properly again.
     mcp_pool.result_by_tool[ToolName.EXECUTE_ACTION] = TARIFF_CHANGED_RESULT
     retry_reply = answer_message(session, "да")
 
@@ -240,7 +249,7 @@ def test_yes_after_a_failed_execution_retries_the_card():
     ]
     assert idempotency_keys == [f"tariff_change:{card.pending_id}"] * 2
     assert fetch_card_outcomes(card) == [
-        ("error", "RuntimeError"),
+        ("error", error_type),
         ("executed", None),
     ]
 

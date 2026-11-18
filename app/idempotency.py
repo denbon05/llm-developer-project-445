@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 
 from actions.contracts import Outcome
@@ -24,11 +24,14 @@ class StoredResult:
     """The result stored under an idempotency key."""
 
     is_duplicate: bool  # the key was taken before, so the operation didn't run
-    result: dict
+    result: Mapping[str, object]
 
 
 async def execute(
-    key: str, sub: str, action: str, operation: Callable[[], Awaitable[dict]]
+    key: str,
+    sub: str,
+    action: str,
+    operation: Callable[[], Awaitable[Mapping[str, object]]],
 ) -> StoredResult:
     """Run the operation unless its key already has a stored result."""
     stored_row = db.fetchone(

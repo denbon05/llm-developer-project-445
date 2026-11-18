@@ -10,11 +10,16 @@ from actions.contracts import (
     ActionError,
     ActionKind,
     ErrorCode,
+    ExecutionResult,
     Outcome,
+    PreparedAction,
+    TicketResult,
     normalize_email,
     normalize_phone,
     normalize_service,
     normalize_tariff,
+    parse_execution_result,
+    parse_ticket_result,
 )
 from core import config
 
@@ -47,7 +52,7 @@ async def fetch_subscriber(sub: str) -> dict:
 
 def build_prepared_action(
     action: ActionKind, details: dict, view: dict
-) -> dict:
+) -> PreparedAction:
     """Return a prepared action: what to execute and what the card shows."""
     return {
         "ok": True,
@@ -63,7 +68,7 @@ def format_price(price_rub: int) -> str:
     return f"{price_rub} ₽/мес"
 
 
-async def prepare_tariff_change(sub: str, tariff: str) -> dict:
+async def prepare_tariff_change(sub: str, tariff: str) -> PreparedAction:
     """Check a tariff change and describe it for a confirmation card."""
     subscriber = await fetch_subscriber(sub)
     tariff_catalog = (await request_mock("GET", "/mock/crm/tariffs"))["tariffs"]
@@ -94,7 +99,7 @@ async def prepare_tariff_change(sub: str, tariff: str) -> dict:
 
 async def prepare_toggle_service(
     sub: str, service: str, should_enable: bool
-) -> dict:
+) -> PreparedAction:
     """Check turning a service on or off and describe it for a card."""
     subscriber = await fetch_subscriber(sub)
     # The CRM mock toggles only the services listed for the subscriber, so
@@ -136,7 +141,7 @@ def nullify_blank(value: str | None) -> str | None:
 
 async def prepare_contacts_update(
     sub: str, phone: str | None, email: str | None
-) -> dict:
+) -> PreparedAction:
     """Check new contact details and describe the change for a card."""
     phone = nullify_blank(phone)
     email = nullify_blank(email)
@@ -183,11 +188,11 @@ def parse_details(details_json: str) -> dict:
 
 async def execute_tariff_change(
     sub: str, details: dict, idempotency_key: str
-) -> dict:
+) -> ExecutionResult:
     """Change the tariff in the billing; its answer has `before` and `after`."""
     # The billing mock keeps its own idempotency record and daily limit, so a
     # retried key never changes the tariff twice.
-    return await request_mock(
+    billing_answer = await request_mock(
         "POST",
         "/mock/billing/tariff-change",
         body={
@@ -196,36 +201,37 @@ async def execute_tariff_change(
             "idempotency_key": idempotency_key,
         },
     )
+    return parse_execution_result(billing_answer)
 
 
-async def execute_service_toggle(sub: str, details: dict) -> dict:
+async def execute_service_toggle(sub: str, details: dict) -> ExecutionResult:
     """Turn a service on or off; a change also reports `before` and `after`."""
     service_name = details.get("service", "")
     # The CRM's answer has only the new state, so the old one is read first.
     subscriber = await fetch_subscriber(sub)
-    toggle_result = await request_mock(
-        "POST",
-        "/mock/crm/toggle-service",
-        body={
-            "sub": sub,
-            "service": service_name,
-            "enabled": details.get("enabled", True),
-        },
+    toggle_result = parse_execution_result(
+        await request_mock(
+            "POST",
+            "/mock/crm/toggle-service",
+            body={
+                "sub": sub,
+                "service": service_name,
+                "enabled": details.get("enabled", True),
+            },
+        )
     )
-    if toggle_result.get("outcome") != Outcome.TOGGLED:
+    if toggle_result["outcome"] != Outcome.TOGGLED:
         return toggle_result
     enabled_by_service = {
         service_row["service"]: service_row["enabled"]
         for service_row in subscriber["services"]
     }
-    return {
-        **toggle_result,
-        "before": enabled_by_service.get(service_name),
-        "after": toggle_result["enabled"],
-    }
+    toggle_result["before"] = enabled_by_service.get(service_name)
+    toggle_result["after"] = toggle_result.get("enabled")
+    return toggle_result
 
 
-async def execute_contacts_update(sub: str, details: dict) -> dict:
+async def execute_contacts_update(sub: str, details: dict) -> ExecutionResult:
     """Set new contacts; a change also reports the fields before and after."""
     new_contacts = {
         "phone": details.get("phone"),
@@ -234,27 +240,35 @@ async def execute_contacts_update(sub: str, details: dict) -> dict:
     # The CRM's answer has only the new contacts, so the old ones are read
     # first.
     subscriber = await fetch_subscriber(sub)
-    update_result = await request_mock(
-        "POST", "/mock/crm/contacts", body={"sub": sub, **new_contacts}
+    update_result = parse_execution_result(
+        await request_mock(
+            "POST", "/mock/crm/contacts", body={"sub": sub, **new_contacts}
+        )
     )
-    if update_result.get("outcome") != Outcome.UPDATED:
+    if update_result["outcome"] != Outcome.UPDATED:
         return update_result
+    contacts_now = {
+        "phone": update_result.get("phone"),
+        "email": update_result.get("email"),
+    }
     # The CRM keeps a contact sent as null, so only the others change.
     changed_fields = [
         field
         for field, new_value in new_contacts.items()
         if new_value is not None
     ]
-    return {
-        **update_result,
-        "before": {field: subscriber[field] for field in changed_fields},
-        "after": {field: update_result[field] for field in changed_fields},
+    update_result["before"] = {
+        field: subscriber[field] for field in changed_fields
     }
+    update_result["after"] = {
+        field: contacts_now[field] for field in changed_fields
+    }
+    return update_result
 
 
 async def execute_action(
     sub: str, action: str, details_json: str, idempotency_key: str
-) -> dict:
+) -> ExecutionResult:
     """Execute a confirmed action and return the mock's outcome."""
     details = parse_details(details_json)
     # Preconditions are not checked again: the mocks refuse what they can't
@@ -273,10 +287,11 @@ async def execute_action(
     )
 
 
-async def create_ticket(sub: str, subject: str, note: str) -> dict:
+async def create_ticket(sub: str, subject: str, note: str) -> TicketResult:
     """Open a support ticket for a human operator."""
-    return await request_mock(
+    ticket_answer = await request_mock(
         "POST",
         "/mock/tickets/create",
         body={"sub": sub, "subject": subject, "note": note},
     )
+    return parse_ticket_result(ticket_answer)

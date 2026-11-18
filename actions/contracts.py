@@ -1,9 +1,12 @@
-"""Action contracts: error codes, execution outcomes and input normalization."""
+"""Action contracts: error codes, tool results and input normalization."""
 
 from __future__ import annotations
 
 import re
 from enum import IntEnum, StrEnum
+from typing import Any, NotRequired, TypedDict
+
+from pydantic import TypeAdapter
 
 
 class McpErrorCode(IntEnum):
@@ -65,6 +68,71 @@ class Outcome(StrEnum):
     UNKNOWN_TARIFF = "unknown_tariff"
     TARIFF_NOT_AVAILABLE = "tariff_not_available"
     UNKNOWN_SERVICE = "unknown_service"
+
+
+class PreparedAction(TypedDict):
+    """A checked action for a confirmation card. Nothing has changed yet."""
+
+    ok: bool  # always true: a refused call raises ActionError instead
+    action: str  # an ActionKind value
+    details: dict  # what execute_action gets after the "да"
+    view: dict  # what the card shows: row label → value
+
+
+class ExecutionResult(TypedDict):
+    """What execute_action reports. Only the outcome is always there."""
+
+    # An Outcome value. A plain str, so that an outcome a mock adds later
+    # still reaches the backend instead of failing the call.
+    outcome: str
+    pending_id: NotRequired[str]  # the executed card, added by the server
+    # The account's state before and after a change: tariff names, the
+    # service's enabled flag, or the contacts that changed.
+    before: NotRequired[Any]
+    after: NotRequired[Any]
+    # A tariff change.
+    price_before: NotRequired[int]
+    price_after: NotRequired[int]
+    # A service toggle.
+    service: NotRequired[str]
+    enabled: NotRequired[bool]
+    # A contacts update: the contacts the subscriber has now.
+    phone: NotRequired[str | None]
+    email: NotRequired[str | None]
+    # Refusals: the daily limit, the current tariff, the closed tariff.
+    limit: NotRequired[int]
+    current: NotRequired[str]
+    tariff: NotRequired[str]
+
+
+class TicketResult(TypedDict):
+    """An opened ticket."""
+
+    ticket_id: NotRequired[str]  # missing when the ticket system failed
+    status: NotRequired[str]
+
+
+# Each checks data against its contract once, at the point where the data
+# enters a process. A key the contract doesn't name is dropped, so a mock's
+# extra fields don't leak further.
+PREPARED_ACTION_ADAPTER = TypeAdapter(PreparedAction)
+EXECUTION_RESULT_ADAPTER = TypeAdapter(ExecutionResult)
+TICKET_RESULT_ADAPTER = TypeAdapter(TicketResult)
+
+
+def parse_prepared_action(data: object) -> PreparedAction:
+    """Return the data as a PreparedAction; raise ValidationError if it isn't."""
+    return PREPARED_ACTION_ADAPTER.validate_python(data)
+
+
+def parse_execution_result(data: object) -> ExecutionResult:
+    """Return the data as an ExecutionResult; raise ValidationError if it isn't."""
+    return EXECUTION_RESULT_ADAPTER.validate_python(data)
+
+
+def parse_ticket_result(data: object) -> TicketResult:
+    """Return the data as a TicketResult; raise ValidationError if it isn't."""
+    return TICKET_RESULT_ADAPTER.validate_python(data)
 
 
 class ActionError(Exception):

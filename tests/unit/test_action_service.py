@@ -280,8 +280,8 @@ def test_service_toggle_goes_to_the_crm(fake_mocks):
         )
     ]
     # Роуминг was off in the CRM before the call.
-    assert execution_result["before"] is False
-    assert execution_result["after"] is True
+    assert execution_result.get("before") is False
+    assert execution_result.get("after") is True
 
 
 def test_contacts_update_sends_null_for_the_contact_it_keeps(fake_mocks):
@@ -304,8 +304,8 @@ def test_contacts_update_sends_null_for_the_contact_it_keeps(fake_mocks):
             {"sub": ANNA_SUB, "phone": None, "email": "new@example.ru"},
         )
     ]
-    assert execution_result["before"] == {"email": "anna@example.ru"}
-    assert execution_result["after"] == {"email": "new@example.ru"}
+    assert execution_result.get("before") == {"email": "anna@example.ru"}
+    assert execution_result.get("after") == {"email": "new@example.ru"}
 
 
 def test_unknown_action_is_refused_with_the_known_ones(fake_mocks):

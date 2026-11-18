@@ -14,16 +14,34 @@ it runs. No auth yet: see Known issues.
 
 | Tool | Called by | Result |
 | --- | --- | --- |
-| `prepare_tariff_change(sub, tariff)` | `tariff` agent | prepared action |
-| `prepare_toggle_service(sub, service, enabled)` | `tariff` agent | prepared action |
-| `prepare_contacts_update(sub, phone, email)` | `tariff` agent | prepared action |
-| `execute_action(sub, action, details_json, pending_id, idempotency_key)` | orchestrator code only | mock result with `outcome`, plus `pending_id` |
-| `create_ticket(sub, subject, note)` | `tickets` agent, orchestrator code | `ticket_id`, `status` |
+| `prepare_tariff_change(sub, tariff)` | `tariff` agent | `PreparedAction` |
+| `prepare_toggle_service(sub, service, enabled)` | `tariff` agent | `PreparedAction` |
+| `prepare_contacts_update(sub, phone, email)` | `tariff` agent | `PreparedAction` |
+| `execute_action(sub, action, details_json, pending_id, idempotency_key)` | orchestrator code only | `ExecutionResult` |
+| `create_ticket(sub, subject, note)` | `tickets` agent, orchestrator code | `TicketResult` |
 
 A prepared action is `{"ok": true, "action", "details", "view"}` and changes
 nothing. `action` is `tariff_change`, `service_toggle` or `contacts_update`.
 `view` is flat: Russian label → scalar, because the web chat renders the keys
 as rows. `execute_action` is in no agent's tool set.
+
+The results are `TypedDict`s in `actions/contracts.py`; only
+`ExecutionResult.outcome` is required there, and it stays a plain `str`, so an
+outcome a mock adds later still arrives. Each is checked where it enters a
+process, with `parse_prepared_action`, `parse_execution_result` and
+`parse_ticket_result` (pydantic `TypeAdapter`): keys the contract doesn't name
+are dropped, and data that breaks it raises `ValidationError`.
+
+- Action server: the mocks' answers are parsed in `actions/service.py`, and the
+  tools are annotated with the result types, so the MCP SDK publishes an
+  output schema and checks each result before sending it. The JSON on the wire
+  is the same as before.
+- Backend: the tool wrapper checks `prepare_*` and agents' `create_ticket`
+  answers inside its `try`, so a broken answer reaches the model as
+  `tool_failed`. `call_execute_action` parses before idempotency could store
+  the result, so a broken answer takes the usual failure path: an `error`
+  entry and `ACTION_FAILED`. `escalate_card` parses the ticket answer; one
+  without `ticket_id` is a failed ticket, as before.
 
 `phone` and `email` are `str | None = None`: models send `null` for the contact
 they keep. The SDK's strict schema lists both as required, so the model sees

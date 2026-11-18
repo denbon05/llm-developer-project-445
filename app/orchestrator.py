@@ -21,7 +21,13 @@ from collections.abc import Awaitable, Callable, Sequence
 
 from structlog.contextvars import bind_contextvars
 
-from actions.contracts import ActionKind, Outcome
+from actions.contracts import (
+    ActionKind,
+    ExecutionResult,
+    Outcome,
+    parse_execution_result,
+    parse_ticket_result,
+)
 from app import audit, cards, idempotency, messages
 from app.answers import CardAnswer, classify_card_answer
 from app.audit import AuditOutcome
@@ -224,9 +230,9 @@ def classify_execution(
 
 async def call_execute_action(
     session: Session, card: Card, idempotency_key: str
-) -> dict:
+) -> ExecutionResult:
     """Call the action server to execute the card."""
-    return await session.mcp.call(
+    execution_answer = await session.mcp.call(
         # The key of the server that hosts the tool: here "actions".
         session.mcp.resource_of(ToolName.EXECUTE_ACTION),
         ToolName.EXECUTE_ACTION,
@@ -240,6 +246,9 @@ async def call_execute_action(
             "idempotency_key": idempotency_key,
         },
     )
+    # An answer that breaks the contract raises here, before idempotency
+    # could store it, and execute_pending treats it as a failed call.
+    return parse_execution_result(execution_answer)
 
 
 # POST-QA: rename to execute_confirmed_card. tests/smoke.py calls this name.
@@ -268,6 +277,7 @@ async def execute_pending(session: Session, card: Card) -> str:
         # The card stays pending and the key stays free, so the next "да"
         # tries again with the same key.
         return messages.ACTION_FAILED
+    result: ExecutionResult
     if stored_result.is_duplicate:
         # A repeat gets the duplicate reply, whatever the first run returned.
         result = {"outcome": Outcome.DUPLICATE}
@@ -277,14 +287,16 @@ async def execute_pending(session: Session, card: Card) -> str:
         # the transaction that changes the tariff, so McpPool must have
         # retried a call whose response was lost: the tariff changed once,
         # during this "да". Billing's answer carries the change.
-        result = {**stored_result.result, "outcome": Outcome.EXECUTED}
+        result = parse_execution_result(
+            {**stored_result.result, "outcome": Outcome.EXECUTED}
+        )
         audit_outcome = AuditOutcome.EXECUTED
         audit_detail = BILLING_RETRY_DETAIL
     else:
-        result = stored_result.result
-        audit_outcome, audit_detail = classify_execution(
-            str(result.get("outcome", ""))
-        )
+        # idempotency keeps plain mappings: parsing gives the result its type
+        # back. call_execute_action has checked it already, so this can't fail.
+        result = parse_execution_result(stored_result.result)
+        audit_outcome, audit_detail = classify_execution(result["outcome"])
     # Only a changed account has `before` and `after` in its result.
     record_card_entry(
         session,
@@ -298,13 +310,13 @@ async def execute_pending(session: Session, card: Card) -> str:
     # refusal (daily limit, a tariff closed meanwhile) or an unknown outcome
     # it stays pending: while it lives, the subscriber may answer it again or
     # hand it to an operator with its details.
-    if result.get("outcome") in idempotency.ACCOUNT_CHANGED_OUTCOMES:
+    if result["outcome"] in idempotency.ACCOUNT_CHANGED_OUTCOMES:
         cards.settle_card(card, CardState.CONFIRMED)
     logger.info(
         "action_executed",
         action=card.action,
         pending_id=card.pending_id,
-        outcome=str(result.get("outcome", "")),
+        outcome=result["outcome"],
     )
     # Code writes the reply from the outcome, no model retells it.
     return messages.build_execution_reply(result)
@@ -338,7 +350,7 @@ async def escalate_card(session: Session, card: Card) -> str:
     """Hand the card's action to an operator and return the reply."""
     # The ticket's note lists the card's rows, so the operator sees what was
     # offered, and what happened when the subscriber confirmed it.
-    ticket = await session.mcp.call(
+    ticket_answer = await session.mcp.call(
         # The key of the server that hosts the tool: here "actions".
         session.mcp.resource_of(ToolName.CREATE_TICKET),
         ToolName.CREATE_TICKET,
@@ -348,7 +360,7 @@ async def escalate_card(session: Session, card: Card) -> str:
             "note": build_ticket_note(card),
         },
     )
-    ticket_id = ticket.get("ticket_id")
+    ticket_id = parse_ticket_result(ticket_answer).get("ticket_id")
     if not ticket_id:
         # No ticket was opened: the card stays live and the subscriber may
         # ask again.

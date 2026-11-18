@@ -23,7 +23,11 @@ from agents import FunctionTool
 from agents.run_context import RunContextWrapper
 from mcp.shared.exceptions import MCPError
 
-from actions.contracts import McpErrorCode
+from actions.contracts import (
+    McpErrorCode,
+    parse_prepared_action,
+    parse_ticket_result,
+)
 from app import audit, cards, telemetry
 from app.audit import AuditOutcome
 from app.sessions import Session
@@ -66,6 +70,14 @@ def create_card(session: Session, prepared: dict) -> dict:
     )
     logger.info("card_created", action=card.action, pending_id=card.pending_id)
     return {"card_created": True, "card": card.view, "next": CARD_NEXT_STEP}
+
+
+def check_action_result(tool_name: str, result: dict) -> None:
+    """Raise ValidationError if an action server's answer breaks its contract."""
+    if tool_name in PREPARE_TOOL_NAMES and result.get("ok"):
+        parse_prepared_action(result)
+    elif tool_name == ToolName.CREATE_TICKET:
+        parse_ticket_result(result)
 
 
 def find_tool_outcome(tool_output: dict) -> str:
@@ -143,6 +155,9 @@ def wrap_mcp_tool(session: Session, tool_name: str) -> FunctionTool:
                 tool_name,
                 args,
             )
+            # An answer that breaks the action server's contract fails like
+            # a server error, below.
+            check_action_result(tool_name, result)
         except MCPError as error:
             # The server refused the call: the model gets the code and hints.
             data = error.data if isinstance(error.data, dict) else {}
@@ -160,7 +175,7 @@ def wrap_mcp_tool(session: Session, tool_name: str) -> FunctionTool:
                     session, tool_name, args, error_output["error"]
                 )
             return args, error_output
-        except Exception as error:  # noqa: BLE001 — сбой сервера становится данными для модели
+        except Exception as error:  # noqa: BLE001 — сбой сервера или его ответа становится данными для модели
             return args, {"error": "tool_failed", "detail": str(error)[:160]}
         # A prepared action becomes a confirmation card.
         if tool_name in PREPARE_TOOL_NAMES and result.get("ok"):

@@ -25,7 +25,13 @@ from starlette.applications import Starlette
 from starlette.routing import Mount
 
 from actions import service as action_service
-from actions.contracts import ActionError, McpErrorCode
+from actions.contracts import (
+    ActionError,
+    ExecutionResult,
+    McpErrorCode,
+    PreparedAction,
+    TicketResult,
+)
 
 actions_server = MCPServer(
     name="actions",
@@ -70,7 +76,7 @@ def convert_refusals_to_mcp_errors() -> Iterator[None]:
 async def prepare_tariff_change(
     sub: Subject,
     tariff: Annotated[str, Field(description="Tariff name, e.g. 'Семейный'.")],
-) -> dict:
+) -> PreparedAction:
     """Prepare a tariff change card."""
     with convert_refusals_to_mcp_errors():
         return await action_service.prepare_tariff_change(sub, tariff)
@@ -89,7 +95,7 @@ async def prepare_toggle_service(
     enabled: Annotated[
         bool, Field(description="true to turn on, false to turn off.")
     ],
-) -> dict:
+) -> PreparedAction:
     """Prepare a service toggle card."""
     with convert_refusals_to_mcp_errors():
         return await action_service.prepare_toggle_service(
@@ -124,7 +130,7 @@ async def prepare_contacts_update(
             )
         ),
     ] = None,
-) -> dict:
+) -> PreparedAction:
     """Prepare a contacts update card."""
     with convert_refusals_to_mcp_errors():
         return await action_service.prepare_contacts_update(sub, phone, email)
@@ -149,14 +155,15 @@ async def execute_action(
     idempotency_key: Annotated[
         str, Field(description="The same key never executes twice.")
     ],
-) -> dict:
+) -> ExecutionResult:
     """Execute a confirmed action."""
     with convert_refusals_to_mcp_errors():
         result = await action_service.execute_action(
             sub, action, details_json, idempotency_key
         )
     # The card id goes back with the outcome, so the result names its card.
-    return {**result, "pending_id": pending_id}
+    result["pending_id"] = pending_id
+    return result
 
 
 @actions_server.tool(
@@ -169,7 +176,7 @@ async def create_ticket(
     sub: Subject,
     subject: Annotated[str, Field(description="Short topic of the request.")],
     note: Annotated[str, Field(description="What the subscriber needs.")],
-) -> dict:
+) -> TicketResult:
     """Create a support ticket."""
     with convert_refusals_to_mcp_errors():
         return await action_service.create_ticket(sub, subject, note)

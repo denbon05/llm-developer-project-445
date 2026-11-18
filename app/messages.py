@@ -1,6 +1,6 @@
 """Fixed text the subscriber sees. Russian until the project moves to English."""
 
-from actions.contracts import Outcome
+from actions.contracts import ExecutionResult, Outcome
 
 TURN_FAILED = "Не удалось обработать запрос. Попробуйте ещё раз."
 UNKNOWN_SESSION = "Сессия не найдена. Обновите страницу."
@@ -42,13 +42,15 @@ EXECUTION_REFUSALS: dict[str, str] = {
 }
 
 
-def build_execution_reply(result: dict) -> str:
+def build_execution_reply(result: ExecutionResult) -> str:
     """Return the reply for the outcome of an executed action."""
-    outcome = str(result.get("outcome", ""))
+    outcome = result["outcome"]
     if outcome == Outcome.EXECUTED:
         return TARIFF_CHANGED.format(**result)
     if outcome == Outcome.TOGGLED:
-        template = SERVICE_ENABLED if result["enabled"] else SERVICE_DISABLED
+        template = (
+            SERVICE_ENABLED if result.get("enabled") else SERVICE_DISABLED
+        )
         return template.format(**result)
     if outcome == Outcome.UPDATED:
         return CONTACTS_UPDATED.format(**result)
