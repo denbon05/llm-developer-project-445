@@ -13,7 +13,7 @@ from agents import Agent
 
 from app.llm import build_agent
 from app.sessions import Session
-from app.tools import PREPARE_TOOLS, ToolName
+from app.tools import PREPARE_TOOL_NAMES, ToolName
 from app.wrap import wrap_tools
 
 # I18N: the report language.
@@ -146,7 +146,8 @@ AGENT_SPECS: dict[str, AgentSpec] = {
 
 def choose_prompt(spec: AgentSpec, session_tools: list[str]) -> str:
     """Return the agent's prompt for the tools this session has."""
-    if spec.prompt_without_actions and not PREPARE_TOOLS & set(session_tools):
+    has_prepare_tools = bool(PREPARE_TOOL_NAMES & set(session_tools))
+    if spec.prompt_without_actions and not has_prepare_tools:
         return spec.prompt_without_actions
     return spec.prompt
 

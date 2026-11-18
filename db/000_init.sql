@@ -80,6 +80,9 @@ create table if not exists sessions(
     session_id text primary key,
     login      text not null,
     sub        text not null,
+    -- POST-QA: store the dialogue here and show it to the operator next to
+    -- the ticket. Nothing writes this column yet.
+    -- UI could display conversation, need to be refactored.
     thread     jsonb not null default '[]',
     created_at timestamptz not null default now()
 );

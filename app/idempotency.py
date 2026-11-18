@@ -32,7 +32,12 @@ async def execute(
 ) -> StoredResult:
     """Run the operation unless its key already has a stored result."""
     stored_row = db.fetchone(
-        "select result from idempotency where key = %s", (key,)
+        """
+        select result
+        from idempotency
+        where key = %s
+        """,
+        (key,),
     )
     if stored_row is not None:
         return StoredResult(
@@ -45,8 +50,11 @@ async def execute(
         # The billing mock inserts the same key into this table when it changes
         # a tariff, so the row may exist already: keep the first one.
         db.execute(
-            "insert into idempotency(key, sub, action, result)"
-            " values (%s, %s, %s, %s) on conflict (key) do nothing",
+            """
+            insert into idempotency (key, sub, action, result)
+            values (%s, %s, %s, %s)
+            on conflict (key) do nothing
+            """,
             (key, sub, action, json.dumps(result, ensure_ascii=False)),
         )
     return StoredResult(is_duplicate=False, result=result)

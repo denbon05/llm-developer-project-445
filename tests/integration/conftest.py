@@ -21,3 +21,17 @@ def postgres() -> Iterator[None]:
         db.migrate()
         yield
         dsn_patch.undo()
+
+
+@pytest.fixture(autouse=True)
+def empty_tables() -> None:
+    """Start every test with empty tables, whatever the last test left."""
+    # pytest sets up session fixtures first, so Postgres is already running.
+    # Code under test opens its own connections and commits, so a test can't
+    # roll its changes back; emptying the tables isolates the tests instead.
+    db.execute(
+        """
+        truncate audit_log, llm_calls, tool_calls, pending_cards, idempotency
+        restart identity
+        """
+    )

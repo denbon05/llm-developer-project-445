@@ -1,0 +1,50 @@
+"""A fake MCP pool and a session backed by it, shared by the tests here."""
+
+from app.sessions import Session
+from core import config
+from core.logging import make_trace_id
+
+
+class FakeMcpPool:
+    """Answers like an MCP pool and remembers every call."""
+
+    def __init__(self, result_by_tool: dict[str, dict | Exception]) -> None:
+        # What each tool returns. A tool whose result is an exception fails
+        # with it, like a server that is down. Calling a tool missing here
+        # fails the test with a KeyError.
+        self.result_by_tool = result_by_tool
+        # Every call in order: the tool's name and its arguments.
+        self.tool_calls: list[tuple[str, dict]] = []
+
+    def resource_of(self, _tool_name: str) -> str:
+        # Every tool these tests call lives on the action server.
+        return "actions"
+
+    def tool_schema(self, _tool_name: str) -> dict:
+        # The action server's tools all take the subscriber.
+        return {"type": "object", "properties": {"sub": {"type": "string"}}}
+
+    def tool_description(self, tool_name: str) -> str:
+        return tool_name
+
+    async def call(
+        self, _resource_key: str, tool_name: str, arguments: dict
+    ) -> dict:
+        self.tool_calls.append((tool_name, arguments))
+        tool_result = self.result_by_tool[tool_name]
+        if isinstance(tool_result, Exception):
+            raise tool_result
+        return tool_result
+
+
+def make_session(mcp_pool: FakeMcpPool) -> Session:
+    """Return a new session of anna backed by the fake MCP pool."""
+    return Session(
+        login="anna",
+        user=config.USERS["anna"],
+        # No tokens: the fake MCP pool doesn't check them.
+        tokens=None,  # pyright: ignore[reportArgumentType]
+        mcp=mcp_pool,  # pyright: ignore[reportArgumentType]
+        # A trace of its own, so a test finds the rows its session wrote.
+        trace_id=make_trace_id(),
+    )

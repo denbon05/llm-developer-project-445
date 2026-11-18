@@ -4,10 +4,6 @@ A turn is one subscriber message. The orchestrator decides which agents run and
 collects the turn's events for the browser. An answer to a live confirmation
 card is handled by code, without the model.
 
-TODO(аудит) — аудит: audit.append на все исходы пути действия
-  (executed с before/after, duplicate_suppressed, rejected_by_user,
-  server_limit, escalated).
-
 TODO(права) — права: «да» → PEP: pep.confirm → pep.execute; при Deny —
   человекочитаемый отказ по reason (session_limit, confirmation_expired,
   card_not_prepared, pdp_unavailable).
@@ -21,14 +17,14 @@ TODO(guardrail) — guardrail: input-проверка реплики до все
 from __future__ import annotations
 
 import json
-import uuid
 from collections.abc import Awaitable, Callable, Sequence
 
 from structlog.contextvars import bind_contextvars
 
 from actions.contracts import ActionKind, Outcome
-from app import cards, idempotency, messages
+from app import audit, cards, idempotency, messages
 from app.answers import CardAnswer, classify_card_answer
+from app.audit import AuditOutcome
 from app.cards import Card, CardState
 from app.editor import (
     build_editor_agent,
@@ -46,9 +42,9 @@ from app.planner import (
     restrict_plan,
 )
 from app.sessions import Session
-from app.tools import PREPARE_TOOLS, ToolName
+from app.tools import PREPARE_TOOL_NAMES, ToolName
 from app.workers import build_worker_agents
-from core.logging import get_logger
+from core.logging import get_logger, make_trace_id
 
 logger = get_logger(__name__)
 
@@ -61,9 +57,30 @@ TICKET_SUBJECTS: dict[str, str] = {
     ActionKind.SERVICE_TOGGLE: "Подключение или отключение услуги",
     ActionKind.CONTACTS_UPDATE: "Смена контактных данных",
 }
+# I18N: the ticket note's line about the card's execution attempts.
+TICKET_ATTEMPTS_LINE = "Попытки исполнения: {attempts}"
+TICKET_NO_ATTEMPTS_LINE = "Попыток исполнения не было"
 # I18N: how a card button press appears in the planner history, as if the
 # subscriber had typed it.
 ANSWER_MESSAGES = {CardAnswer.YES: "да", CardAnswer.NO: "нет"}
+
+# Execution outcomes after which the account has the change.
+EXECUTED_OUTCOMES = frozenset(
+    {Outcome.EXECUTED, Outcome.TOGGLED, Outcome.UPDATED}
+)
+# Refusals by the mocks at execution time: the account or the catalog changed
+# after the card was prepared.
+REFUSED_AT_EXECUTION_OUTCOMES = frozenset(
+    {
+        Outcome.SAME_TARIFF,
+        Outcome.TARIFF_NOT_AVAILABLE,
+        Outcome.UNKNOWN_TARIFF,
+        Outcome.UNKNOWN_SERVICE,
+        Outcome.NOT_FOUND,
+    }
+)
+BILLING_RETRY_DETAIL = "billing had the key: the call was retried"
+TICKET_FAILED_DETAIL = "ticket_failed"
 
 
 async def make_plan(session: Session, message: str) -> Plan:
@@ -157,8 +174,52 @@ async def send_reply(
 
 def start_trace(session: Session) -> None:
     """Give the session a new trace id and bind it to the log context."""
-    session.trace_id = f"tr_{uuid.uuid4().hex[:12]}"
+    session.trace_id = make_trace_id()
     bind_contextvars(trace_id=session.trace_id, session_id=session.session_id)
+
+
+def build_idempotency_key(card: Card) -> str:
+    """Return the key of the card's one operation."""
+    # One card is one operation: every "да" for it reuses this key.
+    return f"{card.action}:{card.pending_id}"
+
+
+def record_card_entry(
+    session: Session,
+    card: Card,
+    outcome: AuditOutcome,
+    *,
+    before: object = None,
+    after: object = None,
+    detail: str | None = None,
+) -> None:
+    """Add an entry about the card to the audit journal."""
+    audit.append(
+        session.user.sub,
+        card.action,
+        outcome,
+        trace_id=session.trace_id,
+        session_id=session.session_id,
+        args=card.details,
+        before=before,
+        after=after,
+        # Also when nothing ran: the key finds the card's whole history.
+        idempotency_key=build_idempotency_key(card),
+        detail=detail,
+    )
+
+
+def classify_execution(
+    execution_outcome: str,
+) -> tuple[AuditOutcome, str | None]:
+    """Return the audit outcome and detail for an execution outcome."""
+    if execution_outcome in EXECUTED_OUTCOMES:
+        return AuditOutcome.EXECUTED, None
+    if execution_outcome == Outcome.DAILY_LIMIT:
+        return AuditOutcome.SERVER_LIMIT, execution_outcome
+    if execution_outcome in REFUSED_AT_EXECUTION_OUTCOMES:
+        return AuditOutcome.REJECTED_BY_CONTRACT, execution_outcome
+    return AuditOutcome.ERROR, execution_outcome
 
 
 async def call_execute_action(
@@ -166,6 +227,7 @@ async def call_execute_action(
 ) -> dict:
     """Call the action server to execute the card."""
     return await session.mcp.call(
+        # The key of the server that hosts the tool: here "actions".
         session.mcp.resource_of(ToolName.EXECUTE_ACTION),
         ToolName.EXECUTE_ACTION,
         {
@@ -183,8 +245,7 @@ async def call_execute_action(
 # POST-QA: rename to execute_confirmed_card. tests/smoke.py calls this name.
 async def execute_pending(session: Session, card: Card) -> str:
     """Execute a confirmed card at most once and return the reply."""
-    # One card is one operation: every "да" for it reuses this key.
-    idempotency_key = f"{card.action}:{card.pending_id}"
+    idempotency_key = build_idempotency_key(card)
     # idempotency.execute calls the action server only if the key has no
     # stored result yet.
     try:
@@ -201,14 +262,37 @@ async def execute_pending(session: Session, card: Card) -> str:
             pending_id=card.pending_id,
             error_type=type(error).__name__,
         )
+        record_card_entry(
+            session, card, AuditOutcome.ERROR, detail=type(error).__name__
+        )
         # The card stays pending and the key stays free, so the next "да"
         # tries again with the same key.
         return messages.ACTION_FAILED
-    # A repeat gets the duplicate reply, whatever the first run returned.
-    result = (
-        {"outcome": Outcome.DUPLICATE}
-        if stored_result.is_duplicate
-        else stored_result.result
+    if stored_result.is_duplicate:
+        # A repeat gets the duplicate reply, whatever the first run returned.
+        result = {"outcome": Outcome.DUPLICATE}
+        audit_outcome, audit_detail = AuditOutcome.DUPLICATE_SUPPRESSED, None
+    elif stored_result.result.get("outcome") == Outcome.DUPLICATE:
+        # Our key was free, yet billing knew it. Billing stores the key in
+        # the transaction that changes the tariff, so McpPool must have
+        # retried a call whose response was lost: the tariff changed once,
+        # during this "да". Billing's answer carries the change.
+        result = {**stored_result.result, "outcome": Outcome.EXECUTED}
+        audit_outcome = AuditOutcome.EXECUTED
+        audit_detail = BILLING_RETRY_DETAIL
+    else:
+        result = stored_result.result
+        audit_outcome, audit_detail = classify_execution(
+            str(result.get("outcome", ""))
+        )
+    # Only a changed account has `before` and `after` in its result.
+    record_card_entry(
+        session,
+        card,
+        audit_outcome,
+        before=result.get("before"),
+        after=result.get("after"),
+        detail=audit_detail,
     )
     # The card is confirmed only once the account has the change. After a
     # refusal (daily limit, a tariff closed meanwhile) or an unknown outcome
@@ -226,19 +310,42 @@ async def execute_pending(session: Session, card: Card) -> str:
     return messages.build_execution_reply(result)
 
 
+def format_attempt(entry: dict) -> str:
+    """Return an audit entry as `outcome (detail)`."""
+    if entry["detail"]:
+        return f"{entry['outcome']} ({entry['detail']})"
+    return entry["outcome"]
+
+
+def build_ticket_note(card: Card) -> str:
+    """Return the card's rows, then a line with its execution attempts."""
+    card_rows = "; ".join(
+        f"{label}: {value}" for label, value in card.view.items()
+    )
+    attempts = [
+        format_attempt(entry)
+        for entry in audit.find_card_entries(build_idempotency_key(card))
+    ]
+    attempts_line = (
+        TICKET_ATTEMPTS_LINE.format(attempts=", ".join(attempts))
+        if attempts
+        else TICKET_NO_ATTEMPTS_LINE
+    )
+    return f"{card_rows}\n{attempts_line}"
+
+
 async def escalate_card(session: Session, card: Card) -> str:
     """Hand the card's action to an operator and return the reply."""
     # The ticket's note lists the card's rows, so the operator sees what was
-    # offered.
+    # offered, and what happened when the subscriber confirmed it.
     ticket = await session.mcp.call(
+        # The key of the server that hosts the tool: here "actions".
         session.mcp.resource_of(ToolName.CREATE_TICKET),
         ToolName.CREATE_TICKET,
         {
             "sub": session.user.sub,
             "subject": TICKET_SUBJECTS.get(card.action, card.action),
-            "note": "; ".join(
-                f"{label}: {value}" for label, value in card.view.items()
-            ),
+            "note": build_ticket_note(card),
         },
     )
     ticket_id = ticket.get("ticket_id")
@@ -246,9 +353,15 @@ async def escalate_card(session: Session, card: Card) -> str:
         # No ticket was opened: the card stays live and the subscriber may
         # ask again.
         logger.error("ticket_failed", pending_id=card.pending_id)
+        record_card_entry(
+            session, card, AuditOutcome.ERROR, detail=TICKET_FAILED_DETAIL
+        )
         return messages.TICKET_FAILED
     # Rejected only once the ticket exists, so a failure leaves the card live.
     cards.settle_card(card, CardState.REJECTED)
+    record_card_entry(
+        session, card, AuditOutcome.ESCALATED, detail=str(ticket_id)
+    )
     logger.info("ticket_created", ticket_id=ticket_id)
     return messages.TICKET_CREATED.format(ticket_id=ticket_id)
 
@@ -296,6 +409,7 @@ async def apply_card_answer(
         return await escalate_card(session, card)
     # "нет" cancels the card.
     cards.settle_card(card, CardState.REJECTED)
+    record_card_entry(session, card, AuditOutcome.REJECTED_BY_USER)
     return messages.CARD_REJECTED
 
 
@@ -337,7 +451,7 @@ def has_created_card(run: AgentRun) -> bool:
     # The tool wrapper adds "card_created" to a prepare tool's output when it
     # stored the card.
     return any(
-        tool_call.name in PREPARE_TOOLS
+        tool_call.name in PREPARE_TOOL_NAMES
         and parse_tool_output(tool_call.output).get("card_created") is True
         for tool_call in run.tool_calls
     )

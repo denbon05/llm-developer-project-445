@@ -1,4 +1,4 @@
-"""How code answers a confirmation card, on the real card and key tables.
+"""How code answers a confirmation card, on the real Postgres tables.
 
 A fake MCP pool stands in for the MCP servers.
 """
@@ -8,12 +8,13 @@ import asyncio
 import pytest
 
 from actions.contracts import ActionKind
-from app import cards, messages, orchestrator
+from app import audit, cards, messages, orchestrator
 from app.answers import CardAnswer
-from app.cards import Card
+from app.cards import Card, CardState
 from app.sessions import Session
 from app.tools import ToolName
 from core import config, db
+from tests.integration.fake_mcp import FakeMcpPool, make_session
 
 ANNA_SUB = config.USERS["anna"].sub
 
@@ -28,42 +29,18 @@ TARIFF_CHANGED_RESULT = {
 TARIFF_CHANGED_REPLY = (
     "Готово: тариф изменён с «Базовый» на «Семейный», 890 ₽/мес."
 )
-
-
-class FakeMcpPool:
-    """Answers like an MCP pool and remembers every call."""
-
-    def __init__(self, result_by_tool: dict[str, dict | Exception]) -> None:
-        # What each tool returns. A tool whose result is an exception fails
-        # with it, like a server that is down. Calling a tool missing here
-        # fails the test with a KeyError.
-        self.result_by_tool = result_by_tool
-        # Every call in order: the tool's name and its arguments.
-        self.tool_calls: list[tuple[str, dict]] = []
-
-    def resource_of(self, _tool_name: str) -> str:
-        # Every tool these tests call lives on the action server.
-        return "actions"
-
-    async def call(
-        self, _resource_key: str, tool_name: str, arguments: dict
-    ) -> dict:
-        self.tool_calls.append((tool_name, arguments))
-        tool_result = self.result_by_tool[tool_name]
-        if isinstance(tool_result, Exception):
-            raise tool_result
-        return tool_result
-
-
-def make_session(mcp_pool: FakeMcpPool) -> Session:
-    """Return a new session of anna backed by the fake MCP pool."""
-    return Session(
-        login="anna",
-        user=config.USERS["anna"],
-        # No tokens: the fake MCP pool doesn't check them.
-        tokens=None,  # pyright: ignore[reportArgumentType]
-        mcp=mcp_pool,  # pyright: ignore[reportArgumentType]
-    )
+# The audit entry's fields a test compares; `id` and `ts` differ every run.
+AUDIT_ENTRY_FIELDS = (
+    "who",
+    "what",
+    "outcome",
+    "args",
+    "before",
+    "after",
+    "trace_id",
+    "session_id",
+    "detail",
+)
 
 
 def create_tariff_card(session: Session) -> Card:
@@ -76,14 +53,24 @@ def create_tariff_card(session: Session) -> Card:
     )
 
 
-def fetch_card_state(card: Card) -> str:
+def fetch_card_entries(card: Card) -> list[dict]:
+    """Return the audit entries about the card, oldest first."""
+    return audit.find_card_entries(orchestrator.build_idempotency_key(card))
+
+
+def fetch_card_outcomes(card: Card) -> list[tuple[str, str | None]]:
+    """Return the outcome and detail of each audit entry about the card."""
+    return [
+        (entry["outcome"], entry["detail"])
+        for entry in fetch_card_entries(card)
+    ]
+
+
+def fetch_card_state(card: Card) -> CardState:
     """Return the state the table holds for the card."""
-    card_row = db.fetchone(
-        "select state from pending_cards where pending_id = %s",
-        (card.pending_id,),
-    )
-    assert card_row is not None
-    return card_row["state"]
+    stored_card = cards.find_card(card.session_id, card.pending_id)
+    assert stored_card is not None
+    return stored_card.state
 
 
 def answer_message(session: Session, message: str) -> str | None:
@@ -137,13 +124,26 @@ def test_yes_executes_the_live_card():
         )
     ]
     assert fetch_card_state(card) == "confirmed"
+    # The journal has who changed what, from what to what, in which turn.
+    [entry] = fetch_card_entries(card)
+    assert {field: entry[field] for field in AUDIT_ENTRY_FIELDS} == {
+        "who": ANNA_SUB,
+        "what": "tariff_change",
+        "outcome": "executed",
+        "args": {"tariff": "Семейный"},
+        "before": "Базовый",
+        "after": "Семейный",
+        "trace_id": session.trace_id,
+        "session_id": session.session_id,
+        "detail": None,
+    }
 
 
 def test_repeated_yes_gets_the_duplicate_reply():
     """A second "да" finds the card's key taken and executes nothing."""
     mcp_pool = FakeMcpPool({ToolName.EXECUTE_ACTION: TARIFF_CHANGED_RESULT})
     session = make_session(mcp_pool)
-    create_tariff_card(session)
+    card = create_tariff_card(session)
     answer_message(session, "да")
 
     reply = answer_message(session, "да")
@@ -151,6 +151,41 @@ def test_repeated_yes_gets_the_duplicate_reply():
     assert reply == messages.ACTION_DUPLICATE
     # Only the first "да" reached the action server.
     assert len(mcp_pool.tool_calls) == 1
+    assert fetch_card_outcomes(card) == [
+        ("executed", None),
+        ("duplicate_suppressed", None),
+    ]
+
+
+def test_billing_duplicate_on_the_first_yes_is_an_execution():
+    """Our key was free, so the tariff changed during this "да"."""
+    # McpPool retried after a lost response, and billing knew the key.
+    mcp_pool = FakeMcpPool(
+        {
+            ToolName.EXECUTE_ACTION: {
+                **TARIFF_CHANGED_RESULT,
+                "outcome": "duplicate",
+            }
+        }
+    )
+    session = make_session(mcp_pool)
+    card = create_tariff_card(session)
+
+    reply = answer_message(session, "да")
+
+    assert reply == TARIFF_CHANGED_REPLY
+    [entry] = fetch_card_entries(card)
+    assert (
+        entry["outcome"],
+        entry["before"],
+        entry["after"],
+        entry["detail"],
+    ) == (
+        "executed",
+        "Базовый",
+        "Семейный",
+        "billing had the key: the call was retried",
+    )
 
 
 def test_card_button_after_a_typed_yes_gets_the_duplicate_reply():
@@ -204,6 +239,10 @@ def test_yes_after_a_failed_execution_retries_the_card():
         arguments["idempotency_key"] for _, arguments in mcp_pool.tool_calls
     ]
     assert idempotency_keys == [f"tariff_change:{card.pending_id}"] * 2
+    assert fetch_card_outcomes(card) == [
+        ("error", "RuntimeError"),
+        ("executed", None),
+    ]
 
 
 def test_no_rejects_the_live_card():
@@ -217,6 +256,7 @@ def test_no_rejects_the_live_card():
     assert reply == messages.CARD_REJECTED
     assert mcp_pool.tool_calls == []
     assert fetch_card_state(card) == "rejected"
+    assert fetch_card_outcomes(card) == [("rejected_by_user", None)]
 
 
 def test_change_of_topic_leaves_the_card_live():
@@ -264,9 +304,17 @@ def test_refused_execution_leaves_the_card_pending():
     assert refusal_reply == messages.ACTION_DAILY_LIMIT
     assert state_after_refusal == "pending"
     assert ticket_reply == messages.TICKET_CREATED.format(ticket_id="t_1674")
-    # The ticket carries the card's rows.
-    assert mcp_pool.tool_calls[-1][1]["note"] == "Станет: Семейный, 890 ₽/мес"
+    # The ticket carries the card's rows and what the execution ran into.
+    # I18N: the note's attempts line.
+    assert mcp_pool.tool_calls[-1][1]["note"] == (
+        "Станет: Семейный, 890 ₽/мес\n"
+        "Попытки исполнения: server_limit (daily_limit)"
+    )
     assert fetch_card_state(card) == "rejected"
+    assert fetch_card_outcomes(card) == [
+        ("server_limit", "daily_limit"),
+        ("escalated", "t_1674"),
+    ]
 
 
 def test_asking_for_an_operator_turns_the_card_into_a_ticket():
@@ -279,17 +327,21 @@ def test_asking_for_an_operator_turns_the_card_into_a_ticket():
 
     assert reply == messages.TICKET_CREATED.format(ticket_id="t_1674")
     # The note holds the card's rows, so the operator sees what was offered.
+    # I18N: the note's attempts line.
     assert mcp_pool.tool_calls == [
         (
             ToolName.CREATE_TICKET,
             {
                 "sub": ANNA_SUB,
                 "subject": "Смена тарифа",
-                "note": "Станет: Семейный, 890 ₽/мес",
+                "note": (
+                    "Станет: Семейный, 890 ₽/мес\nПопыток исполнения не было"
+                ),
             },
         )
     ]
     assert fetch_card_state(card) == "rejected"
+    assert fetch_card_outcomes(card) == [("escalated", "t_1674")]
 
 
 def test_failed_ticket_leaves_the_card_live():
@@ -304,6 +356,8 @@ def test_failed_ticket_leaves_the_card_live():
         answer_message(session, "позови оператора")
 
     assert fetch_card_state(card) == "pending"
+    # The failure reaches the caller and is not recorded.
+    assert fetch_card_outcomes(card) == []
 
 
 def test_ticket_without_an_id_leaves_the_card_live():
@@ -316,6 +370,7 @@ def test_ticket_without_an_id_leaves_the_card_live():
 
     assert reply == messages.TICKET_FAILED
     assert fetch_card_state(card) == "pending"
+    assert fetch_card_outcomes(card) == [("error", "ticket_failed")]
 
 
 def send_new_card_replies(session: Session, card: Card) -> list[dict]:

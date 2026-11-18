@@ -10,6 +10,7 @@ from actions.contracts import (
     ActionError,
     ActionKind,
     ErrorCode,
+    Outcome,
     normalize_email,
     normalize_phone,
     normalize_service,
@@ -180,6 +181,77 @@ def parse_details(details_json: str) -> dict:
     return details
 
 
+async def execute_tariff_change(
+    sub: str, details: dict, idempotency_key: str
+) -> dict:
+    """Change the tariff in the billing; its answer has `before` and `after`."""
+    # The billing mock keeps its own idempotency record and daily limit, so a
+    # retried key never changes the tariff twice.
+    return await request_mock(
+        "POST",
+        "/mock/billing/tariff-change",
+        body={
+            "sub": sub,
+            "tariff": details.get("tariff", ""),
+            "idempotency_key": idempotency_key,
+        },
+    )
+
+
+async def execute_service_toggle(sub: str, details: dict) -> dict:
+    """Turn a service on or off; a change also reports `before` and `after`."""
+    service_name = details.get("service", "")
+    # The CRM's answer has only the new state, so the old one is read first.
+    subscriber = await fetch_subscriber(sub)
+    toggle_result = await request_mock(
+        "POST",
+        "/mock/crm/toggle-service",
+        body={
+            "sub": sub,
+            "service": service_name,
+            "enabled": details.get("enabled", True),
+        },
+    )
+    if toggle_result.get("outcome") != Outcome.TOGGLED:
+        return toggle_result
+    enabled_by_service = {
+        service_row["service"]: service_row["enabled"]
+        for service_row in subscriber["services"]
+    }
+    return {
+        **toggle_result,
+        "before": enabled_by_service.get(service_name),
+        "after": toggle_result["enabled"],
+    }
+
+
+async def execute_contacts_update(sub: str, details: dict) -> dict:
+    """Set new contacts; a change also reports the fields before and after."""
+    new_contacts = {
+        "phone": details.get("phone"),
+        "email": details.get("email"),
+    }
+    # The CRM's answer has only the new contacts, so the old ones are read
+    # first.
+    subscriber = await fetch_subscriber(sub)
+    update_result = await request_mock(
+        "POST", "/mock/crm/contacts", body={"sub": sub, **new_contacts}
+    )
+    if update_result.get("outcome") != Outcome.UPDATED:
+        return update_result
+    # The CRM keeps a contact sent as null, so only the others change.
+    changed_fields = [
+        field
+        for field, new_value in new_contacts.items()
+        if new_value is not None
+    ]
+    return {
+        **update_result,
+        "before": {field: subscriber[field] for field in changed_fields},
+        "after": {field: update_result[field] for field in changed_fields},
+    }
+
+
 async def execute_action(
     sub: str, action: str, details_json: str, idempotency_key: str
 ) -> dict:
@@ -189,37 +261,11 @@ async def execute_action(
     # do, and setting a service or contact to its current value is harmless.
     match action:
         case ActionKind.TARIFF_CHANGE:
-            # The billing mock keeps its own idempotency record and daily
-            # limit, so a retried key never changes the tariff twice.
-            return await request_mock(
-                "POST",
-                "/mock/billing/tariff-change",
-                body={
-                    "sub": sub,
-                    "tariff": details.get("tariff", ""),
-                    "idempotency_key": idempotency_key,
-                },
-            )
+            return await execute_tariff_change(sub, details, idempotency_key)
         case ActionKind.SERVICE_TOGGLE:
-            return await request_mock(
-                "POST",
-                "/mock/crm/toggle-service",
-                body={
-                    "sub": sub,
-                    "service": details.get("service", ""),
-                    "enabled": details.get("enabled", True),
-                },
-            )
+            return await execute_service_toggle(sub, details)
         case ActionKind.CONTACTS_UPDATE:
-            return await request_mock(
-                "POST",
-                "/mock/crm/contacts",
-                body={
-                    "sub": sub,
-                    "phone": details.get("phone"),
-                    "email": details.get("email"),
-                },
-            )
+            return await execute_contacts_update(sub, details)
     raise ActionError(
         ErrorCode.UNKNOWN_ACTION,
         f"Неизвестное действие «{action}».",

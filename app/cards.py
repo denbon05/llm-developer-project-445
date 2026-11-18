@@ -12,11 +12,11 @@ from core import config, db
 
 # The columns build_card reads, in every query that returns cards. The
 # database counts the seconds left, with the same clock that set expires_at.
-CARD_COLUMNS: Final = (
-    "pending_id, session_id, sub, action, details, card, state,"
-    " greatest(ceil(extract(epoch from expires_at - now())), 0)::int"
-    " as seconds_left"
-)
+CARD_COLUMNS: Final = """
+    pending_id, session_id, sub, action, details, card, state,
+    greatest(ceil(extract(epoch from expires_at - now())), 0)::int
+        as seconds_left
+"""
 
 
 class CardState(StrEnum):
@@ -74,14 +74,24 @@ def create(session, action: str, details: dict, view: dict) -> Card:
         # A session waits for one answer at a time: the new card replaces
         # the one still pending.
         cur.execute(
-            "update pending_cards set state = %s"
-            " where session_id = %s and state = %s",
+            """
+            update pending_cards
+            set state = %s
+            where session_id = %s and state = %s
+            """,
             (CardState.REPLACED, session.session_id, CardState.PENDING),
         )
         cur.execute(
-            "insert into pending_cards"
-            "(pending_id, session_id, sub, action, details, card, expires_at)"
-            " values (%s, %s, %s, %s, %s, %s, now() + make_interval(secs => %s))",
+            """
+            insert into pending_cards (
+                pending_id, session_id, sub, action, details, card, trace_id,
+                expires_at
+            )
+            values (
+                %s, %s, %s, %s, %s, %s, %s,
+                now() + make_interval(secs => %s)
+            )
+            """,
             (
                 pending_id,
                 session.session_id,
@@ -89,6 +99,8 @@ def create(session, action: str, details: dict, view: dict) -> Card:
                 action,
                 to_json(details),
                 to_json(view),
+                # The turn that created the card, NULL outside a turn.
+                session.trace_id or None,
                 config.CARD_TTL_SEC,
             ),
         )
@@ -116,8 +128,13 @@ def build_card(card_row: dict) -> Card:
 def find_latest_card(session_id: str) -> Card | None:
     """Return the session's newest card in any state, expired or not."""
     card_row = db.fetchone(
-        f"select {CARD_COLUMNS} from pending_cards"
-        " where session_id = %s order by created_at desc limit 1",
+        f"""
+        select {CARD_COLUMNS}
+        from pending_cards
+        where session_id = %s
+        order by created_at desc
+        limit 1
+        """,
         (session_id,),
     )
     return build_card(card_row) if card_row else None
@@ -126,8 +143,11 @@ def find_latest_card(session_id: str) -> Card | None:
 def find_card(session_id: str, pending_id: str) -> Card | None:
     """Return the session's card with this id in any state, expired or not."""
     card_row = db.fetchone(
-        f"select {CARD_COLUMNS} from pending_cards"
-        " where pending_id = %s and session_id = %s",
+        f"""
+        select {CARD_COLUMNS}
+        from pending_cards
+        where pending_id = %s and session_id = %s
+        """,
         (pending_id, session_id),
     )
     return build_card(card_row) if card_row else None
@@ -136,6 +156,10 @@ def find_card(session_id: str, pending_id: str) -> Card | None:
 def settle_card(card: Card, state: CardState) -> None:
     """Record how the card ended."""
     db.execute(
-        "update pending_cards set state = %s where pending_id = %s",
+        """
+        update pending_cards
+        set state = %s
+        where pending_id = %s
+        """,
         (state, card.pending_id),
     )

@@ -182,10 +182,10 @@ question or another request must not confirm or escalate a card.
 
 | Outcome | Reply |
 | --- | --- |
-| `executed` | `Готово: тариф изменён с «A» на «B», N ₽/мес.` |
+| `executed`, or billing's `duplicate` while our key was free (see [04](04-audit.md)) | `Готово: тариф изменён с «A» на «B», N ₽/мес.` |
 | `toggled` | `Готово: услуга «X» подключена.` / `отключена.` |
 | `updated` | `Готово: контакты обновлены — телефон …, почта ….` |
-| `duplicate` (our table or billing) | `Эта операция уже исполнена — повтор не выполнялся.` |
+| our key already taken | `Эта операция уже исполнена — повтор не выполнялся.` |
 | `daily_limit` | `Лимит смен тарифа на сегодня исчерпан. …` |
 | `same_tariff`, `tariff_not_available`, `unknown_tariff`, `unknown_service`, `not_found` | a sentence from `EXECUTION_REFUSALS` |
 | exception, other outcome | `Не удалось выполнить операцию. Ответьте «да», чтобы повторить.` |
@@ -238,7 +238,7 @@ card shown, or empty) and `tickets` (count). No message text.
   moved to `app/answers.py`, and the unused `classify_answer` is gone.
 - `find_new_card` compares the newest card before the agents with the newest
   card after them; it reads no session field.
-- `ToolName` has the action tools; `PREPARE_TOOLS` lists the three `prepare_*`.
+- `ToolName` has the action tools; `PREPARE_TOOL_NAMES` lists the three `prepare_*`.
 - `READ_AGENTS` became `ACTION_AGENTS` with the inverse check.
 - `SERVICE_CATALOG` in `actions/service.py` is gone: the subscriber's service
   list is the catalog.
@@ -256,7 +256,7 @@ card shown, or empty) and `tickets` (count). No message text.
   show its rows in another order.
 - Two sessions using one key at the same moment could both run; the lock is
   per session. Only tariff changes have the billing barrier behind it.
-- Smoke group 3 also needs the audit and the PEP.
+- Smoke group 3 also needs the PEP and the PDP.
 - `Session` is mutable state in the memory of one process, and any function
   that gets it can change any field. It is lost on restart and can't be shared
   between workers. Only the cards are durable (`pending_cards`).
@@ -275,9 +275,6 @@ card shown, or empty) and `tickets` (count). No message text.
   with the policy of step 6.
 - A new card replaces the session's pending one before the policy approves
   it; a denied card (steps 6–7) would leave the session with none.
-- `McpPool` retries after a lost response: the billing mock then answers
-  `duplicate`, and the first "да" reads «уже исполнена». To handle with the
-  audit of step 4.
 - The decision endpoint reports the requested answer as `outcome`, also when
   execution failed, and "нет" to a confirmed card gets the 404 text.
 - Step 6: `apply_card_answer` returns `None` for a missing or expired card

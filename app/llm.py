@@ -1,8 +1,5 @@
 """The single boundary every LLM run passes: agents are built and run here.
 
-TODO(аудит): в run_agent — INSERT в llm_calls: trace_id, имя агента,
-  модель, токены (result.context_wrapper.usage), латентность.
-
 TODO(failover): если llm_pool.enabled() — запуск через
   llm_pool.run_with_failover, в llm_calls — фактический провайдер.
 """
@@ -24,8 +21,9 @@ from agents import (
 )
 from agents.result import RunResult
 
+from app import telemetry
 from core import config
-from core.logging import get_logger
+from core.logging import get_logger, read_trace_id
 
 logger = get_logger(__name__)
 
@@ -96,9 +94,19 @@ async def run_agent(
     """Run one agent to its final output."""
     started_at = time.perf_counter()
     result = await Runner.run(agent, agent_input, max_turns=MAX_AGENT_TURNS)
-    seconds = round(time.perf_counter() - started_at, 2)
+    elapsed_seconds = time.perf_counter() - started_at
+    seconds = round(elapsed_seconds, 2)
     tool_calls = collect_tool_calls(result)
     usage = result.context_wrapper.usage
+    # The trace id comes from the log context, so callers don't pass it.
+    telemetry.record_llm_call(
+        read_trace_id(),
+        agent.name,
+        str(agent.model),
+        usage.input_tokens,
+        usage.output_tokens,
+        round(elapsed_seconds * 1000),
+    )
     if not str(result.final_output).strip():
         # After a tool call small models sometimes end with an empty message.
         logger.warning("llm_run_empty_output", agent=agent.name)

@@ -24,6 +24,7 @@ help:
 	@echo "make test-integration - тесты на настоящем Postgres (нужен Docker)"
 	@echo "make smoke      - проверки по шагам, группа: make smoke G=0"
 	@echo "make scenarios  - диалоговые сценарии на живой LLM      [сценарии]"
+	@echo "make trace      - журналы одного хода, T=<trace_id>, без T — последний"
 	@echo "make reset      - вернуть демо-данные моков в исходное"
 	@echo "make lint       - ruff + pylint (короткие имена), F=<файлы>"
 	@echo "make format     - ruff: автоисправления и форматирование, F=<файлы>"
@@ -95,6 +96,11 @@ smoke:
 
 scenarios:
 	$(RUN) python -m scripts.run_scenarios
+
+# The trace to print: make trace T=tr_1a2b3c4d5e6f. Without T, the newest one.
+T ?=
+trace:
+	$(RUN) python -m app.audit $(T)
 
 reset:
 	curl -s -X POST http://127.0.0.1:8100/mock/admin/reset

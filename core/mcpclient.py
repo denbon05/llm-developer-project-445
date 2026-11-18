@@ -76,18 +76,29 @@ class McpPool:
             return f"{config.ACTIONS_URL}/actions/mcp"
         return f"{config.STAND_URL}/{key}/mcp"
 
+    # POST-QA: name these lookups as verbs and their argument `tool_name`:
+    # tool_names → list_tool_names, resource_of → get_resource_key,
+    # tool_schema → get_tool_schema, tool_description → get_tool_description.
+    # tests/smoke.py calls tool_names and tool_schema.
+
+    # The names of every tool the connected servers offer, sorted.
     def tool_names(self) -> list[str]:
         return sorted(self._tools)
 
+    # The key of the server that hosts the tool, e.g. "actions" or "crm":
+    # call() takes it to pick the connection.
     def resource_of(self, name: str) -> str:
         """Какому серверу принадлежит инструмент."""
         return self._tools[name][0]
 
+    # The JSON schema of the tool's arguments, as its server lists it.
     def tool_schema(self, name: str) -> dict:
         tool = self._tools[name][1]
         schema = tool.input_schema
         return dict(schema)
 
+    # The text the model reads to decide when to call the tool; the tool's
+    # name when the server gives none.
     def tool_description(self, name: str) -> str:
         return self._tools[name][1].description or name
 

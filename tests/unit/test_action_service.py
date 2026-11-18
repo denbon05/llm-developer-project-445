@@ -257,8 +257,14 @@ def test_tariff_change_goes_to_billing_with_the_idempotency_key(fake_mocks):
 
 
 def test_service_toggle_goes_to_the_crm(fake_mocks):
-    """The CRM gets the service and the state to set."""
-    asyncio.run(
+    """The CRM gets the service and the state to set; both states come back."""
+    fake_mocks.response_by_path["/mock/crm/toggle-service"] = {
+        "outcome": "toggled",
+        "service": "Роуминг",
+        "enabled": True,
+    }
+
+    execution_result = asyncio.run(
         service.execute_action(
             ANNA_SUB,
             "service_toggle",
@@ -273,11 +279,20 @@ def test_service_toggle_goes_to_the_crm(fake_mocks):
             {"sub": ANNA_SUB, "service": "Роуминг", "enabled": True},
         )
     ]
+    # Роуминг was off in the CRM before the call.
+    assert execution_result["before"] is False
+    assert execution_result["after"] is True
 
 
 def test_contacts_update_sends_null_for_the_contact_it_keeps(fake_mocks):
-    """The CRM keeps a contact that arrives as null."""
-    asyncio.run(
+    """The CRM keeps a contact that arrives as null; only the other changes."""
+    fake_mocks.response_by_path["/mock/crm/contacts"] = {
+        "outcome": "updated",
+        "phone": "+7 900 111-22-33",
+        "email": "new@example.ru",
+    }
+
+    execution_result = asyncio.run(
         service.execute_action(
             ANNA_SUB, "contacts_update", '{"email": "new@example.ru"}', "key_1"
         )
@@ -289,6 +304,8 @@ def test_contacts_update_sends_null_for_the_contact_it_keeps(fake_mocks):
             {"sub": ANNA_SUB, "phone": None, "email": "new@example.ru"},
         )
     ]
+    assert execution_result["before"] == {"email": "anna@example.ru"}
+    assert execution_result["after"] == {"email": "new@example.ru"}
 
 
 def test_unknown_action_is_refused_with_the_known_ones(fake_mocks):
