@@ -10,6 +10,7 @@ class ToolName(StrEnum):
     GET_MY_TARIFF = "get_my_tariff"
     LIST_TARIFFS = "list_tariffs"
     LIST_MY_CHARGES = "list_my_charges"
+    GET_SUBSCRIBER_OVERVIEW = "get_subscriber_overview"
     SEARCH_KB = "search_kb"
     PREPARE_TARIFF_CHANGE = "prepare_tariff_change"
     PREPARE_TOGGLE_SERVICE = "prepare_toggle_service"

@@ -1,4 +1,4 @@
-"""The tool wrapper hides the subject and turns prepare results into cards.
+"""The tool wrapper checks the allowlist and turns prepare results into cards.
 
 A fake MCP pool stands in for the MCP servers, so no services are needed.
 """
@@ -6,28 +6,22 @@ A fake MCP pool stands in for the MCP servers, so no services are needed.
 import asyncio
 import json
 
-from app import wrap
+import pytest
+from agents import FunctionToolResult, ToolsToFinalOutputResult
+
+from app import messages, wrap
 from app.cards import Card
+from app.permissions import Allowlist
 from app.sessions import Session
 from app.tools import ToolName
 from core import config
 
-ANNA_SUB = config.USERS["anna"].sub
 BORIS_SUB = config.USERS["boris"].sub
 
-TICKET_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "sub": {"type": "string"},
-        "subject": {"type": "string"},
-        "note": {"type": "string"},
-    },
-    "required": ["sub", "subject", "note"],
-}
 PREPARE_SCHEMA = {
     "type": "object",
-    "properties": {"sub": {"type": "string"}, "tariff": {"type": "string"}},
-    "required": ["sub", "tariff"],
+    "properties": {"tariff": {"type": "string"}},
+    "required": ["tariff"],
 }
 READ_SCHEMA = {"type": "object", "properties": {}}
 PREPARED = {
@@ -36,6 +30,10 @@ PREPARED = {
     "details": {"tariff": "Семейный"},
     "view": {"Станет": "Семейный, 890 ₽/мес"},
 }
+# What anna's models may call of the tools these tests use.
+ANNA_ALLOWLIST: Allowlist = frozenset(
+    {ToolName.PREPARE_TARIFF_CHANGE, ToolName.GET_MY_TARIFF}
+)
 
 
 class FakeMcpPool:
@@ -65,13 +63,16 @@ class FakeMcpPool:
         return self.result_by_tool.get(name, {})
 
 
-def make_session(mcp_pool: FakeMcpPool) -> Session:
+def make_session(
+    mcp_pool: FakeMcpPool, allowlist: Allowlist = ANNA_ALLOWLIST
+) -> Session:
     """Return anna's session backed by the fake MCP pool."""
     return Session(
         login="anna",
         user=config.USERS["anna"],
         tokens=None,  # pyright: ignore[reportArgumentType]
         mcp=mcp_pool,  # pyright: ignore[reportArgumentType]
+        allowlist=allowlist,
     )
 
 
@@ -81,40 +82,53 @@ def invoke(tool, arguments: dict) -> dict:
     return json.loads(output)
 
 
-def test_model_never_sees_the_subject():
-    """The schema given to the model has no `sub`, the rest is unchanged."""
-    mcp_pool = FakeMcpPool({ToolName.CREATE_TICKET: TICKET_SCHEMA}, {})
+def test_agent_gets_only_offered_and_visible_tools():
+    """A tool the allowlist hides or no server offers is left out."""
+    mcp_pool = FakeMcpPool(
+        {
+            ToolName.PREPARE_TARIFF_CHANGE: PREPARE_SCHEMA,
+            ToolName.GET_MY_TARIFF: READ_SCHEMA,
+        },
+        {},
+    )
+    # A session that may read but not prepare cards, like boris's.
+    session = make_session(
+        mcp_pool,
+        allowlist=frozenset({ToolName.GET_MY_TARIFF, ToolName.GET_MY_PROFILE}),
+    )
 
-    tool = wrap.wrap_mcp_tool(make_session(mcp_pool), ToolName.CREATE_TICKET)
+    agent_tools = wrap.build_agent_tools(
+        session,
+        [
+            ToolName.PREPARE_TARIFF_CHANGE,
+            ToolName.GET_MY_TARIFF,
+            # Allowed, but no server of the session offers it.
+            ToolName.GET_MY_PROFILE,
+        ],
+    )
 
-    assert set(tool.params_json_schema["properties"]) == {"subject", "note"}
-    assert tool.params_json_schema["required"] == ["subject", "note"]
-    assert "sub" in TICKET_SCHEMA["properties"]  # the MCP pool's copy is intact
-
-
-def test_subject_is_always_the_sessions_subscriber():
-    """Whatever the model sends as `sub` is overwritten."""
-    mcp_pool = FakeMcpPool({ToolName.CREATE_TICKET: TICKET_SCHEMA}, {})
-    tool = wrap.wrap_mcp_tool(make_session(mcp_pool), ToolName.CREATE_TICKET)
-
-    # The session is anna's, but the model sends boris's id.
-    invoke(tool, {"sub": BORIS_SUB, "subject": "s", "note": "n"})
-
-    # The MCP server received anna's id: the wrapper replaced the model's.
-    assert mcp_pool.call_arguments == [
-        {"sub": ANNA_SUB, "subject": "s", "note": "n"}
-    ]
+    assert [tool.name for tool in agent_tools] == [ToolName.GET_MY_TARIFF]
 
 
-def test_tools_without_a_subject_are_left_alone():
-    """Read tools take the subject from the token and get no `sub`."""
-    mcp_pool = FakeMcpPool({ToolName.GET_MY_TARIFF: READ_SCHEMA}, {})
-    tool = wrap.wrap_mcp_tool(make_session(mcp_pool), ToolName.GET_MY_TARIFF)
+def test_denied_call_never_reaches_the_server():
+    """A call naming a subscriber gets the denial instead of an answer."""
+    mcp_pool = FakeMcpPool(
+        {ToolName.PREPARE_TARIFF_CHANGE: PREPARE_SCHEMA},
+        {ToolName.PREPARE_TARIFF_CHANGE: PREPARED},
+    )
+    session = make_session(mcp_pool)
+    tool = wrap.build_agent_tool(session, ToolName.PREPARE_TARIFF_CHANGE)
 
-    invoke(tool, {})
+    # anna's session, but the model names boris.
+    tool_output = invoke(tool, {"sub": BORIS_SUB, "tariff": "семейный"})
 
-    assert tool.params_json_schema["properties"] == {}
-    assert mcp_pool.call_arguments == [{}]
+    assert tool_output == {
+        "error": "denied",
+        "reason": "object_from_arguments:sub",
+        "retryable": False,
+    }
+    assert mcp_pool.call_arguments == []
+    assert session.used_tools == []
 
 
 def test_successful_prepare_creates_a_card(monkeypatch):
@@ -133,7 +147,7 @@ def test_successful_prepare_creates_a_card(monkeypatch):
         {ToolName.PREPARE_TARIFF_CHANGE: PREPARE_SCHEMA},
         {ToolName.PREPARE_TARIFF_CHANGE: PREPARED},
     )
-    tool = wrap.wrap_mcp_tool(
+    tool = wrap.build_agent_tool(
         make_session(mcp_pool), ToolName.PREPARE_TARIFF_CHANGE
     )
 
@@ -142,3 +156,45 @@ def test_successful_prepare_creates_a_card(monkeypatch):
     assert tool_output["card_created"] is True
     assert tool_output["card"] == PREPARED["view"]
     assert [card.details for card in created_cards] == [{"tariff": "Семейный"}]
+
+
+@pytest.mark.parametrize(
+    ("tool_outputs", "expected_result"),
+    [
+        # A denial among the step's outputs ends the run with the fixed
+        # report.
+        (
+            [
+                json.dumps({"tariff": "Базовый"}),
+                json.dumps(
+                    {
+                        "error": "denied",
+                        "reason": "object_from_arguments:sub",
+                        "retryable": False,
+                    }
+                ),
+            ],
+            ToolsToFinalOutputResult(
+                is_final_output=True, final_output=messages.OPERATION_DENIED
+            ),
+        ),
+        # Without one the model reads the outputs, a server's refusal too.
+        (
+            [json.dumps({"error": "unknown_tariff", "retryable": True})],
+            ToolsToFinalOutputResult(is_final_output=False),
+        ),
+    ],
+)
+def test_denial_ends_the_agent_run(tool_outputs, expected_result):
+    """The model never sees a denial, so it can't retry around it."""
+    tool_results = [
+        # The check reads only the output: no tool or run item is needed.
+        FunctionToolResult(tool=None, output=tool_output, run_item=None)  # pyright: ignore[reportArgumentType]
+        for tool_output in tool_outputs
+    ]
+
+    # The check reads no run context either.
+    assert (
+        wrap.stop_run_at_denial(None, tool_results)  # pyright: ignore[reportArgumentType]
+        == expected_result
+    )

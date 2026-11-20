@@ -80,7 +80,7 @@ example above:
 trace tr_c3
 turn tr_a1
 14:05:12 llm_calls  planner  in=812 out=64  1820 ms
-14:05:14 tool_calls prepare_tariff_change  card_created  {"tariff": "семейный", "sub": "u_4f2a"}  95 ms
+14:05:14 tool_calls prepare_tariff_change  card_created  {"tariff": "семейный"}  95 ms
 14:05:15 llm_calls  tariff  in=1617 out=31  2425 ms
 turn tr_b2
 14:05:20 audit_log  executed  tariff_change  Базовый → Семейный  key=tariff_change:p_1a2b
@@ -118,8 +118,8 @@ and editor don't pass it. A run that raises writes no row.
 The tool wrapper writes one row per model call, whatever happens. Latency is
 measured around the whole call.
 
-- `args`: the parsed arguments, `sub` included as sent; top-level strings cut
-  to `TOOL_ARG_MAX_CHARS` (100). Arguments that aren't JSON:
+- `args`: the parsed arguments, as the model sent them; top-level strings cut
+  to `TOOL_ARG_MAX_CHARS` (100). Arguments that aren't a JSON object:
   `{"raw": <the first 100 characters>}`.
 - `outcome`: `ok`; `card_created` when a `prepare_*` call created a card;
   otherwise the `error` the model gets (`bad_arguments`, `tool_failed`, or the
@@ -169,14 +169,20 @@ finds the key in our check and is `duplicate_suppressed`.
 
 ### Tool wrapper
 
+Every entry the wrapper writes has `what` = `name_audited_action(tool_name)`:
+the action a `prepare_*` tool prepares (`ACTION_BY_PREPARE_TOOL` in
+`app/tools.py`), otherwise the tool's name. Its `args` are the model's
+arguments without `FREE_TEXT_ARGUMENTS` (`note`, which retells the
+subscriber's words), via `remove_free_text_arguments`.
+
 - A `prepare_*` call the action server refused (`MCPError` with code
-  `McpErrorCode.ACTION_REFUSED`) → `rejected_by_contract`: `what` = the action
-  the tool prepares (`ACTION_BY_PREPARE_TOOL` in `app/tools.py`), `args` = the
-  model's arguments, `detail` = the error code. Validation and business codes
-  alike. Other failures reach `tool_calls` only.
+  `McpErrorCode.ACTION_REFUSED`) → `rejected_by_contract`, `detail` = the error
+  code. Validation and business codes alike. Other failures reach `tool_calls`
+  only.
 - `create_ticket` by an agent that returned a `ticket_id` → `escalated`, `what`
-  `create_ticket`, `args` `{"subject": …}` only (the note retells the
-  subscriber's words), `detail` = the ticket id.
+  `create_ticket`, `args` `{"subject": …}`, `detail` = the ticket id.
+- A call the allowlist refused → `denied`, `detail` = the reason: see
+  [05](05-permissions.md).
 
 ## State before and after
 

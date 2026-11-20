@@ -135,7 +135,8 @@ async def open_session(request: SessionRequest) -> JSONResponse:
             "session_id": session.session_id,
             "name": session.user.name,
             "role": session.user.role,
-            "visible_tools": session.mcp.tool_names(),
+            # Barrier 1: only the tools the session's agents may get.
+            "visible_tools": session.list_visible_tools(),
         }
     )
 

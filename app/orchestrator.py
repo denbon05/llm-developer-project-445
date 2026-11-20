@@ -145,10 +145,16 @@ def collect_kb_sources(worker_runs: Sequence[AgentRun]) -> list[str]:
 
 
 async def write_reply(
-    message: str, worker_runs: Sequence[AgentRun], sources: Sequence[str]
+    session: Session,
+    message: str,
+    worker_runs: Sequence[AgentRun],
+    sources: Sequence[str],
 ) -> str:
     """Return the editor's reply that cites only the given sources."""
-    editor = build_editor_agent()
+    # The role in the session's token says who reads the reply: a subscriber
+    # or an operator.
+    claims = await session.tokens.claims()
+    editor = build_editor_agent(str(claims.get("role", "")))
     editor_input = build_editor_input(message, worker_runs)
     draft = (await run_agent(editor, editor_input)).report
     # In live runs the editor sometimes cited an article no agent had found.
@@ -237,9 +243,6 @@ async def call_execute_action(
         session.mcp.resource_of(ToolName.EXECUTE_ACTION),
         ToolName.EXECUTE_ACTION,
         {
-            # Code makes this call, not the tool wrapper, so it passes the
-            # subject itself.
-            "sub": session.user.sub,
             "action": card.action,
             "details_json": json.dumps(card.details, ensure_ascii=False),
             "pending_id": card.pending_id,
@@ -355,7 +358,6 @@ async def escalate_card(session: Session, card: Card) -> str:
         session.mcp.resource_of(ToolName.CREATE_TICKET),
         ToolName.CREATE_TICKET,
         {
-            "sub": session.user.sub,
             "subject": TICKET_SUBJECTS.get(card.action, card.action),
             "note": build_ticket_note(card),
         },
@@ -507,7 +509,7 @@ async def send_card_and_ticket_replies(
     # same message, go to the editor as in any turn.
     if editor_runs:
         sources = collect_kb_sources(editor_runs)
-        editor_reply = await write_reply(message, editor_runs, sources)
+        editor_reply = await write_reply(session, message, editor_runs, sources)
         await emit({"type": "reply", "text": editor_reply, "sources": sources})
         sent_texts.append(editor_reply)
 
@@ -593,7 +595,7 @@ async def run_agents(
 
     # Nothing was created: the editor writes the whole reply.
     sources = collect_kb_sources(worker_runs)
-    reply = await write_reply(message, worker_runs, sources)
+    reply = await write_reply(session, message, worker_runs, sources)
     await send_reply(session, message, reply, sources, emit)
 
 

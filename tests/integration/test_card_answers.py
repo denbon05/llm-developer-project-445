@@ -109,13 +109,12 @@ def test_yes_executes_the_live_card():
     reply = answer_message(session, "да")
 
     assert reply == TARIFF_CHANGED_REPLY
-    # Code passes anna's id itself, and the key is made of the card's action
-    # and id: every "да" to this card gets the same key.
+    # The key is made of the card's action and id: every "да" to this card
+    # gets the same key.
     assert mcp_pool.tool_calls == [
         (
             ToolName.EXECUTE_ACTION,
             {
-                "sub": ANNA_SUB,
                 "action": "tariff_change",
                 "details_json": '{"tariff": "Семейный"}',
                 "pending_id": card.pending_id,
@@ -341,7 +340,6 @@ def test_asking_for_an_operator_turns_the_card_into_a_ticket():
         (
             ToolName.CREATE_TICKET,
             {
-                "sub": ANNA_SUB,
                 "subject": "Смена тарифа",
                 "note": (
                     "Станет: Семейный, 890 ₽/мес\nПопыток исполнения не было"

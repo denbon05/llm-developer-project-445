@@ -6,12 +6,17 @@ introduces them.
 | Term | Meaning |
 | --- | --- |
 | Access mode | Whether a plan step only reads data or changes it |
+| Allowlist | The names of the tools a session may call, derived from its token's role and scope |
 | Audit entry | A row of the append-only journal: who tried to change what or asked for an operator, the outcome, the state before and after |
+| Barrier 1, visible tools | The allowlist applied when agents are built: a model never sees a tool outside it |
+| Barrier 2, admission | The allowlist applied to each model's tool call before it reaches the server; a call naming a subscriber is refused too |
 | Card | A confirmation card: a prepared action the subscriber must confirm before it runs |
+| Claims | The fields of a token: subject (`sub`), role, scope, audience, expiry |
 | Dropped step | A plan step the gate removed, with the reason |
 | Editor | The agent that writes the reply from the agents' reports |
 | Gate | Code that checks the plan before anything runs |
 | Idempotency key | `<action>:<pending_id>`: one confirmed card runs its action at most once |
+| Identity argument | A tool argument that names a subscriber (`sub`, `user_id`, `account`, `subscriber`, `msisdn`); the servers take the subscriber from the token instead |
 | JWT, JWKS | A signed access token, and the public keys used to verify it |
 | Live card | A card in state `pending` with time left (`Card.is_live`) |
 | PDP | Policy Decision Point: the service that answers Allow or Deny |

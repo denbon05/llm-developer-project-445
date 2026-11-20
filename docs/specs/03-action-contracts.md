@@ -8,17 +8,18 @@ execute it once. Terms: [glossary](../glossary.md). The read-only turn is in
 
 `make actions` serves `actions.server:app` on :8220, MCP at `/actions/mcp`.
 Sessions connect to it like to the read servers, so a session opens only while
-it runs. No auth yet: see Known issues.
+it runs. Every request needs a token issued for it, and the tools take the
+subscriber from that token: see [05](05-permissions.md).
 
 ## Tools
 
 | Tool | Called by | Result |
 | --- | --- | --- |
-| `prepare_tariff_change(sub, tariff)` | `tariff` agent | `PreparedAction` |
-| `prepare_toggle_service(sub, service, enabled)` | `tariff` agent | `PreparedAction` |
-| `prepare_contacts_update(sub, phone, email)` | `tariff` agent | `PreparedAction` |
-| `execute_action(sub, action, details_json, pending_id, idempotency_key)` | orchestrator code only | `ExecutionResult` |
-| `create_ticket(sub, subject, note)` | `tickets` agent, orchestrator code | `TicketResult` |
+| `prepare_tariff_change(tariff)` | `tariff` agent | `PreparedAction` |
+| `prepare_toggle_service(service, enabled)` | `tariff` agent | `PreparedAction` |
+| `prepare_contacts_update(phone, email)` | `tariff` agent | `PreparedAction` |
+| `execute_action(action, details_json, pending_id, idempotency_key)` | orchestrator code only | `ExecutionResult` |
+| `create_ticket(subject, note)` | `tickets` agent, orchestrator code | `TicketResult` |
 
 A prepared action is `{"ok": true, "action", "details", "view"}` and changes
 nothing. `action` is `tariff_change`, `service_toggle` or `contacts_update`.
@@ -101,16 +102,16 @@ twice is harmless.
 
 - `tariff`: the three `prepare_*`, `get_my_tariff`, `list_tariffs`,
   `get_my_profile`. Named after tariffs, it also covers services and contacts.
-  Its first call for a change is the matching `prepare_*`. If the session has
-  none of them, code gives it `TARIFF_NO_ACTIONS_PROMPT`: changes are
-  unavailable, offer an operator.
+  Its first call for a change is the matching `prepare_*`. If the session may
+  call none of them ([05](05-permissions.md)), code gives it
+  `TARIFF_NO_ACTIONS_PROMPT`: changes are unavailable, offer an operator.
 - `tickets`: `create_ticket`, called at once, no clarifying questions.
 - The gate keeps `write` only for `ACTION_AGENTS = ("tariff", "tickets")`.
 
 ## Wrapper
 
-- If a tool schema has `sub`, the model gets the schema without it, and every
-  call gets `session.user.sub`, overwriting what the model sent.
+- The model's arguments reach the server as sent, after the allowlist checks
+  of [05](05-permissions.md). No tool takes the subscriber as an argument.
 - A successful `prepare_*` → `cards.create(...)` → the model gets
   `{"card_created": true, "card": <view>, "next": ...}`. Errors stay JSON with
   `error` and the data.
@@ -189,8 +190,8 @@ question or another request must not confirm or escalate a card.
 
 1. key `f"{action}:{pending_id}"`;
 2. `idempotency.execute(key, sub, action, ...)` around the MCP call
-   `execute_action`, with `sub` passed by code and `details_json` as a JSON
-   string;
+   `execute_action`, with `details_json` as a JSON string; the server takes
+   the subscriber from the session's token;
 3. settle `confirmed` only when the account has the change: the outcome is in
    `idempotency.ACCOUNT_CHANGED_OUTCOMES`, or the key was taken already. After
    an exception, a refusal or an unknown outcome the card stays `pending`:
@@ -265,11 +266,9 @@ card shown, or empty) and `tickets` (count). No message text.
 ## Known issues
 
 - `McpPool.call` treats every `MCPError` except forbidden as transport. Each
-  action refusal costs a token refresh, a reconnect and a second call. Harmless
-  for `prepare_*`, but a real transport fault during `create_ticket` can create
-  two tickets.
-- The action tools take `sub` as an argument until permissions are done. Smoke
-  group 2 calls them without it, so 4 of its 6 checks stay red until then.
+  action refusal costs a reconnect and a second call, and, since the action
+  server checks tokens, a new token from the issuer. Harmless for `prepare_*`,
+  but a real transport fault during `create_ticket` can create two tickets.
 - jsonb doesn't keep key order, so a card view re-read from the database may
   show its rows in another order.
 - Two sessions using one key at the same moment could both run; the lock is
@@ -312,9 +311,9 @@ card shown, or empty) and `tickets` (count). No message text.
 ## Acceptance
 
 - `make test`, `make test-integration` (needs Docker) and `make lint` pass.
-- With `make actions` running and `sub` passed explicitly: `prepare_tariff_change`
-  for «семейный» returns a card, «люкс» returns `unknown_tariff` with
-  `available`, boris and «игровой» returns `same_tariff`.
+- With `make actions` running, calls through an `McpPool` with the user's
+  token: `prepare_tariff_change` for «семейный» returns a card, «люкс» returns
+  `unknown_tariff` with `available`, boris and «игровой» returns `same_tariff`.
 - `execute_pending` twice on one card, and «да», «да» in the chat: «Готово…»,
   then «Эта операция уже исполнена — повтор не выполнялся.».
 - Scenario `30_tariff_change_ok` on a live model: a card with the price

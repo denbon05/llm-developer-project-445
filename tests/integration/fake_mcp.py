@@ -1,8 +1,14 @@
 """A fake MCP pool and a session backed by it, shared by the tests here."""
 
+from app import permissions
 from app.sessions import Session
 from core import config
 from core.logging import make_trace_id
+
+# What anna's token allows: the claims the issuer puts in it.
+ANNA_ALLOWLIST = permissions.allowlist_from_claims(
+    {"role": "client", "scope": "tariffs:read tariffs:write charges:read"}
+)
 
 
 class FakeMcpPool:
@@ -21,8 +27,8 @@ class FakeMcpPool:
         return "actions"
 
     def tool_schema(self, _tool_name: str) -> dict:
-        # The action server's tools all take the subscriber.
-        return {"type": "object", "properties": {"sub": {"type": "string"}}}
+        # Only the model reads the schema, and these tests have no model.
+        return {"type": "object", "properties": {}}
 
     def tool_description(self, tool_name: str) -> str:
         return tool_name
@@ -45,6 +51,7 @@ def make_session(mcp_pool: FakeMcpPool) -> Session:
         # No tokens: the fake MCP pool doesn't check them.
         tokens=None,  # pyright: ignore[reportArgumentType]
         mcp=mcp_pool,  # pyright: ignore[reportArgumentType]
+        allowlist=ANNA_ALLOWLIST,
         # A trace of its own, so a test finds the rows its session wrote.
         trace_id=make_trace_id(),
     )

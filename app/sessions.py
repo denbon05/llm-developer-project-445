@@ -4,11 +4,10 @@
 доверенный клиент — выпускает у издателя токены для всех MCP-серверов
 (по одному на resource, RFC 8707) и держит открытые соединения.
 
-Готово — в контрактах меняется одна строка (resource_keys), в правах вы ДОПОЛНИТЕ Session полями
-claims / allowlist / pep / guard_state: claims токена определяют allowlist
-(app.permissions), pep — клиент PDP (app.pep, лениво), guard_state —
-verdikt guardrail хода. Там же функция pep_of(session) — отдаёт PEP
-сессии, создавая его при первом обращении (её зовёт оркестратор и smoke).
+В правах вы ДОПОЛНИТЕ Session полями pep / guard_state: pep — клиент PDP
+(app.pep, лениво), guard_state — verdikt guardrail хода. Там же функция
+pep_of(session) — отдаёт PEP сессии, создавая его при первом обращении (её
+зовёт оркестратор и smoke).
 """
 
 from __future__ import annotations
@@ -20,12 +19,16 @@ from typing import TYPE_CHECKING
 
 from agents import Agent, TResponseInputItem
 
+from app import permissions
 from core import config, db
+from core.logging import get_logger
 from core.mcpclient import McpPool
 from core.tokens import Tokens
 
 if TYPE_CHECKING:
     from app.planner import DroppedStep
+
+logger = get_logger(__name__)
 
 # An even number: every turn adds a message and a reply, so the trimmed history
 # still starts with the subscriber.
@@ -38,6 +41,8 @@ class Session:
     user: config.User
     tokens: Tokens
     mcp: McpPool
+    # The operations the token's claims allow, fixed for the session's life.
+    allowlist: permissions.Allowlist
     # The dialogue as the subscriber saw it, for resolving follow-up questions.
     planner_messages: list[TResponseInputItem] = field(default_factory=list)
     used_tools: list[str] = field(default_factory=list)
@@ -50,6 +55,10 @@ class Session:
     session_id: str = field(
         default_factory=lambda: f"sess_{uuid.uuid4().hex[:8]}"
     )
+
+    def list_visible_tools(self) -> list[str]:
+        """Return the tools of the session's servers its models may see."""
+        return permissions.visible_tools(self.allowlist, self.mcp.tool_names())
 
     def record_tool_use(self, tool: str) -> None:
         self.used_tools.append(tool)
@@ -75,13 +84,26 @@ async def open_session(login: str) -> Session:
     tokens = Tokens(login)
     pool = McpPool(tokens, resource_keys=("crm", "billing", "kb", "actions"))
     await pool.connect()
+    # The pool holds a token for each server by now, and every token carries
+    # the same role and scope, so the default one will do.
+    claims = await tokens.claims()
+    allowlist = permissions.allowlist_from_claims(claims)
 
-    session = Session(login=login, user=user, tokens=tokens, mcp=pool)
+    session = Session(
+        login=login, user=user, tokens=tokens, mcp=pool, allowlist=allowlist
+    )
     db.execute(
         "insert into sessions(session_id, login, sub) values (%s, %s, %s)",
         (session.session_id, login, user.sub),
     )
     SESSIONS[session.session_id] = session
+    # The rights this session got: what its models will be able to see.
+    logger.info(
+        "session_opened",
+        session_id=session.session_id,
+        role=claims.get("role", ""),
+        visible_tools=session.list_visible_tools(),
+    )
     return session
 
 

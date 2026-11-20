@@ -27,6 +27,7 @@ help:
 	@echo "make trace      - журналы одного хода, T=<trace_id>, без T — последний"
 	@echo "make reset      - вернуть демо-данные моков в исходное"
 	@echo "make lint       - ruff + pylint (короткие имена), F=<файлы>"
+	@echo "make typecheck  - basedpyright по всему коду, кроме tests/smoke.py"
 	@echo "make format     - ruff: автоисправления и форматирование, F=<файлы>"
 	@echo "make inspect-mcp - все MCP-серверы в MCP Inspector, LOGIN=<пользователь>"
 
@@ -55,6 +56,11 @@ lint:
 	uv run ruff check $(F)
 	uv run ruff format --check $(F)
 	uv run pylint $(F)
+
+# tests/smoke.py is left out while it calls functions not written yet
+# (`pep_of`, `guardrail_client.check`).
+typecheck:
+	uv run basedpyright app actions core services pdp guardrail kb scripts stand.py tests/unit tests/integration
 
 format:
 	uv run ruff check --fix-only $(F)

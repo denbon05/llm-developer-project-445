@@ -1,9 +1,17 @@
-"""Citation checks around the editor. No services or model are needed."""
+"""The editor's prompt and the citation checks around it.
+
+No services or model are needed.
+"""
+
+import pytest
 
 from app.editor import (
+    EDITOR_PROMPT,
     NO_REPORT,
+    OPERATOR_EDITOR_PROMPT,
     build_editor_input,
     build_repair_input,
+    choose_editor_prompt,
     has_citation,
     remove_unknown_citations,
 )
@@ -19,6 +27,22 @@ def test_empty_report_is_marked_without_raw_tool_results():
 
     assert NO_REPORT in editor_input
     assert "raw article text" not in editor_input
+
+
+@pytest.mark.parametrize(
+    ("user_role", "expected_prompt"),
+    [
+        # A subscriber reads about their own account.
+        ("client", EDITOR_PROMPT),
+        # An operator reads about the subscribers they asked about.
+        ("operator", OPERATOR_EDITOR_PROMPT),
+        # A role the editor doesn't know gets the subscriber's prompt.
+        ("auditor", EDITOR_PROMPT),
+    ],
+)
+def test_editor_prompt_follows_the_user_role(user_role, expected_prompt):
+    """The role in the token tells who reads the reply."""
+    assert choose_editor_prompt(user_role) == expected_prompt
 
 
 def test_finds_a_citation():

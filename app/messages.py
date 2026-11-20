@@ -17,6 +17,12 @@ TICKET_CREATED = (
     "Передал обращение оператору, номер {ticket_id}. С вами свяжутся."
 )
 TICKET_FAILED = "Не удалось передать обращение оператору. Попробуйте ещё раз."
+# The report of a run stopped by a denied tool call. It names no id and no
+# reason, so it doesn't confirm that another subscriber exists.
+OPERATION_DENIED = (
+    "Операция не выполнена: в чате можно работать только со своим аккаунтом "
+    "и только с разрешёнными вам операциями."
+)
 
 TARIFF_CHANGED = (
     "Готово: тариф изменён с «{before}» на «{after}», {price_after} ₽/мес."

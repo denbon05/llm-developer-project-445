@@ -50,6 +50,7 @@ BUDGET_RUB = float(os.environ.get("BUDGET_RUB", "50"))
 LLM_PRICE_RUB_PER_1M = float(os.environ.get("LLM_PRICE_RUB_PER_1M", "60"))
 
 # ── Ресурсы MCP-серверов (RFC 8707): canonical URI адресата токена ───────
+# POST-QA: improve naming
 RESOURCES = {
     "crm": f"{STAND_URL}/crm",
     "billing": f"{STAND_URL}/billing",

@@ -18,7 +18,8 @@ after the subscriber confirms a card that shows exactly what will change.
 - **Confirmation cards with idempotent execution.** A plan change runs only
   after an explicit confirmation, and a repeated "yes" never runs it twice.
 - **A JWT in every call.** MCP servers check the token's audience and read the
-  subscriber from it, never from tool arguments.
+  subscriber from it, never from tool arguments. A role allowlist from the
+  token hides forbidden tools from the model and checks every call it makes.
 - **Policy as code.** Confirmation windows and per-session limits live in
   Dogwood policies evaluated by a separate decision service. If the service is
   unreachable, actions are closed.
@@ -88,7 +89,7 @@ pick a demo user:
 - `make smoke` runs checks that need no model, grouped by component:
   `make smoke G=0` checks the stand.
 - `make scenarios` runs end-to-end dialogs from `data/dialogs/` on a live model.
-- `make lint` and `make format` run ruff and pylint.
+- `make lint` and `make format` run ruff and pylint; `make typecheck` runs basedpyright.
 
 ## Background
 

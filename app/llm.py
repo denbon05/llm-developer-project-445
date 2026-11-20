@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from agents import (
     Agent,
@@ -17,6 +17,7 @@ from agents import (
     Tool,
     ToolCallItem,
     ToolCallOutputItem,
+    ToolsToFinalOutputFunction,
     TResponseInputItem,
 )
 from agents.result import RunResult
@@ -56,6 +57,10 @@ def build_agent(
     instructions: str,
     tools: list[Tool] | None = None,
     output_type: type | None = None,
+    # What happens after each tool step. The SDK's default lets the model read
+    # the tool outputs and go on; a function can end the run there instead.
+    tool_use_behavior: ToolsToFinalOutputFunction
+    | Literal["run_llm_again"] = "run_llm_again",
 ) -> Agent:
     """Return an agent on the configured model."""
     return Agent(
@@ -69,6 +74,7 @@ def build_agent(
             if output_type
             else None
         ),
+        tool_use_behavior=tool_use_behavior,
     )
 
 

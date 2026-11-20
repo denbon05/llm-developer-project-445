@@ -17,6 +17,7 @@ from core import config
 from tests.integration.fake_mcp import FakeMcpPool, make_session
 
 ANNA_SUB = config.USERS["anna"].sub
+BORIS_SUB = config.USERS["boris"].sub
 
 PREPARED_ACTION = {
     "ok": True,
@@ -38,7 +39,7 @@ def call_wrapped_tool(
     session: Session, tool_name: str, input_json: str
 ) -> None:
     """Call the tool through its wrapper, the way the agent SDK does."""
-    tool = wrap.wrap_mcp_tool(session, tool_name)
+    tool = wrap.build_agent_tool(session, tool_name)
     # The wrapper never reads the run context, so the test passes none.
     asyncio.run(tool.on_invoke_tool(None, input_json))  # pyright: ignore[reportArgumentType]
 
@@ -58,18 +59,14 @@ def fetch_recorded_rows(
 @pytest.mark.parametrize(
     ("tool_name", "input_json", "tool_result", "expected_row"),
     [
-        # A result: strings are cut, `sub` is the session's subscriber.
+        # A result: the arguments as the model sent them, strings cut.
         (
             ToolName.CREATE_TICKET,
             json.dumps({"subject": "Тариф", "note": LONG_NOTE}),
             {"ticket_id": "t_1674"},
             {
                 "outcome": "ok",
-                "args": {
-                    "subject": "Тариф",
-                    "note": LONG_NOTE[:100],
-                    "sub": ANNA_SUB,
-                },
+                "args": {"subject": "Тариф", "note": LONG_NOTE[:100]},
             },
         ),
         # A prepared action became a card.
@@ -77,20 +74,14 @@ def fetch_recorded_rows(
             ToolName.PREPARE_TARIFF_CHANGE,
             '{"tariff": "семейный"}',
             PREPARED_ACTION,
-            {
-                "outcome": "card_created",
-                "args": {"tariff": "семейный", "sub": ANNA_SUB},
-            },
+            {"outcome": "card_created", "args": {"tariff": "семейный"}},
         ),
         # The action server refused the call: its code.
         (
             ToolName.PREPARE_TARIFF_CHANGE,
             '{"tariff": "люкс"}',
             UNKNOWN_TARIFF_REFUSAL,
-            {
-                "outcome": "unknown_tariff",
-                "args": {"tariff": "люкс", "sub": ANNA_SUB},
-            },
+            {"outcome": "unknown_tariff", "args": {"tariff": "люкс"}},
         ),
         # The server is down.
         (
@@ -99,11 +90,7 @@ def fetch_recorded_rows(
             RuntimeError("server is down"),
             {
                 "outcome": "tool_failed",
-                "args": {
-                    "subject": "Тариф",
-                    "note": "оператор",
-                    "sub": ANNA_SUB,
-                },
+                "args": {"subject": "Тариф", "note": "оператор"},
             },
         ),
         # Arguments that aren't JSON: the start of the text the model wrote.
@@ -114,6 +101,16 @@ def fetch_recorded_rows(
             {
                 "outcome": "bad_arguments",
                 "args": {"raw": ("{" + LONG_NOTE)[:100]},
+            },
+        ),
+        # JSON, but an array instead of an object: the same as above.
+        (
+            ToolName.PREPARE_TARIFF_CHANGE,
+            '[{"tariff": "семейный"}]',
+            PREPARED_ACTION,
+            {
+                "outcome": "bad_arguments",
+                "args": {"raw": '[{"tariff": "семейный"}]'},
             },
         ),
     ],
@@ -143,8 +140,23 @@ def test_every_model_call_leaves_a_tool_call_row(
             {
                 "what": "tariff_change",
                 "outcome": "rejected_by_contract",
-                "args": {"tariff": "люкс", "sub": ANNA_SUB},
+                "args": {"tariff": "люкс"},
                 "detail": "unknown_tariff",
+            },
+        ),
+        # A call naming a subscriber is denied before the server: the action
+        # it attempts and the reason. The identity key stays, the note goes.
+        (
+            ToolName.PREPARE_TARIFF_CHANGE,
+            json.dumps(
+                {"sub": BORIS_SUB, "tariff": "семейный", "note": "для Бориса"}
+            ),
+            PREPARED_ACTION,
+            {
+                "what": "tariff_change",
+                "outcome": "denied",
+                "args": {"sub": BORIS_SUB, "tariff": "семейный"},
+                "detail": "object_from_arguments:sub",
             },
         ),
         # An agent's ticket: the subject only, the note retells the subscriber.
@@ -161,7 +173,7 @@ def test_every_model_call_leaves_a_tool_call_row(
         ),
     ],
 )
-def test_refused_prepare_and_ticket_leave_an_audit_entry(
+def test_refused_call_and_ticket_leave_an_audit_entry(
     tool_name, input_json, tool_result, expected_entry
 ):
     """The journal has the subscriber's attempts, not only executed changes."""

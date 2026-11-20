@@ -64,9 +64,10 @@ it, so a new entry is known to both.
 ## Worker agents and editor
 
 - `data` has `get_my_profile`, `get_my_tariff`, `list_tariffs`,
-  `list_my_charges`. `kb` has `search_kb`. `tariff` and `tickets`: see 03.
-- Tool names live in `ToolName`. `wrap_tools` skips unknown names silently, so a
-  unit test checks every name against the MCP servers.
+  `list_my_charges` and the operator's `get_subscriber_overview` (05). `kb`
+  has `search_kb`. `tariff` and `tickets`: see 03.
+- Tool names live in `ToolName`. `build_agent_tools` skips unknown names
+  silently, so a unit test checks every name against the MCP servers.
 - Agents get at most `MAX_AGENT_TURNS` (6) LLM calls.
 - Small models sometimes end with an empty message after a tool call. The editor
   then gets `The agent returned no report.` and `llm_run_empty_output` is logged
@@ -74,6 +75,7 @@ it, so a new entry is known to both.
   article text, which must not reach the editor unfiltered.
 - The editor sees only the message and the numbered reports. With no reports it
   answers on its own and must not claim that data was checked.
+  Its prompt depends on who reads the reply: see [05](05-permissions.md).
 - If articles were found and the reply has no citation, the editor is asked once
   to restore them, with the exact citations in the request. Prompt wording alone
   left about a third of such replies uncited.

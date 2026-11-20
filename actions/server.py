@@ -2,14 +2,6 @@
 
 Its tools prepare a confirmation card, execute a confirmed action and create
 a support ticket.
-
-TODO(права): перевод сервера под JWT —
-  make_mcp_server("actions", resource=RESOURCES["actions"]) из
-  core.server_auth (OAuth 2.1 resource server: Bearer в каждом вызове,
-  проверка подписи/iss/aud); убрать sub из всех контрактов — субъект из
-  get_access_token().subject (mcp.server.auth.middleware.auth_context).
-  До этого шага аргумент sub — осознанная дыра; попытка протащить чужой
-  sub станет тестом IDOR.
 """
 
 from __future__ import annotations
@@ -18,7 +10,7 @@ from collections.abc import AsyncGenerator, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from typing import Annotated
 
-from mcp.server import MCPServer
+from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.shared.exceptions import MCPError
 from pydantic import Field
 from starlette.applications import Starlette
@@ -32,9 +24,16 @@ from actions.contracts import (
     PreparedAction,
     TicketResult,
 )
+from core.config import RESOURCES
+from core.server_auth import make_mcp_server
 
-actions_server = MCPServer(
-    name="actions",
+# Every request needs a Bearer token issued for this server: the SDK checks
+# its signature, issuer, audience and expiry, and answers 401 otherwise. No
+# role or scope is checked here: the backend's allowlist decides who may
+# prepare a card, and the business rules still answer every caller.
+actions_server = make_mcp_server(
+    "actions",
+    resource=RESOURCES["actions"],
     instructions=(
         "Changes to a subscriber's tariff, services and contacts. prepare_* "
         "tools only prepare a confirmation card; nothing changes until the "
@@ -42,12 +41,15 @@ actions_server = MCPServer(
     ),
 )
 
-# The subject comes as an argument until tokens carry it. The backend removes
-# it from what the model sees and fills it in on every call, so keeping `sub`
-# in this file only makes it a small diff to drop.
-Subject = Annotated[
-    str, Field(description="Subscriber id. Filled in by the backend.")
-]
+
+def read_token_subject() -> str:
+    """Return the subscriber named by the call's verified token."""
+    access_token = get_access_token()
+    # The SDK's auth middleware turns away a request without a valid token,
+    # so this fails only if a tool runs outside it.
+    if access_token is None or not access_token.subject:
+        raise RuntimeError("the call has no verified token")
+    return access_token.subject
 
 
 @contextmanager
@@ -74,12 +76,13 @@ def convert_refusals_to_mcp_errors() -> Iterator[None]:
     )
 )
 async def prepare_tariff_change(
-    sub: Subject,
     tariff: Annotated[str, Field(description="Tariff name, e.g. 'Семейный'.")],
 ) -> PreparedAction:
     """Prepare a tariff change card."""
     with convert_refusals_to_mcp_errors():
-        return await action_service.prepare_tariff_change(sub, tariff)
+        return await action_service.prepare_tariff_change(
+            read_token_subject(), tariff
+        )
 
 
 @actions_server.tool(
@@ -90,7 +93,6 @@ async def prepare_tariff_change(
     )
 )
 async def prepare_toggle_service(
-    sub: Subject,
     service: Annotated[str, Field(description="Service name, e.g. 'Музыка'.")],
     enabled: Annotated[
         bool, Field(description="true to turn on, false to turn off.")
@@ -99,7 +101,7 @@ async def prepare_toggle_service(
     """Prepare a service toggle card."""
     with convert_refusals_to_mcp_errors():
         return await action_service.prepare_toggle_service(
-            sub, service, enabled
+            read_token_subject(), service, enabled
         )
 
 
@@ -111,7 +113,6 @@ async def prepare_toggle_service(
     )
 )
 async def prepare_contacts_update(
-    sub: Subject,
     # Optional and nullable: models send null for a field they don't change.
     phone: Annotated[
         str | None,
@@ -133,7 +134,9 @@ async def prepare_contacts_update(
 ) -> PreparedAction:
     """Prepare a contacts update card."""
     with convert_refusals_to_mcp_errors():
-        return await action_service.prepare_contacts_update(sub, phone, email)
+        return await action_service.prepare_contacts_update(
+            read_token_subject(), phone, email
+        )
 
 
 @actions_server.tool(
@@ -143,7 +146,6 @@ async def prepare_contacts_update(
     )
 )
 async def execute_action(
-    sub: Subject,
     action: Annotated[
         str,
         Field(description="tariff_change, service_toggle or contacts_update."),
@@ -159,7 +161,7 @@ async def execute_action(
     """Execute a confirmed action."""
     with convert_refusals_to_mcp_errors():
         result = await action_service.execute_action(
-            sub, action, details_json, idempotency_key
+            read_token_subject(), action, details_json, idempotency_key
         )
     # The card id goes back with the outcome, so the result names its card.
     result["pending_id"] = pending_id
@@ -173,13 +175,14 @@ async def execute_action(
     )
 )
 async def create_ticket(
-    sub: Subject,
     subject: Annotated[str, Field(description="Short topic of the request.")],
     note: Annotated[str, Field(description="What the subscriber needs.")],
 ) -> TicketResult:
     """Create a support ticket."""
     with convert_refusals_to_mcp_errors():
-        return await action_service.create_ticket(sub, subject, note)
+        return await action_service.create_ticket(
+            read_token_subject(), subject, note
+        )
 
 
 @asynccontextmanager
