@@ -19,7 +19,7 @@ from app import audit, cards, messages, permissions, telemetry
 from app.audit import AuditOutcome
 from app.sessions import Session
 from app.tools import ACTION_BY_PREPARE_TOOL, PREPARE_TOOL_NAMES, ToolName
-from core.logging import get_logger
+from core.logging import get_logger, shorten_for_log
 
 logger = get_logger(__name__)
 
@@ -202,7 +202,16 @@ def build_agent_tool(session: Session, tool_name: str) -> FunctionTool:
             find_tool_outcome(tool_output),
             round((time.perf_counter() - started_at) * 1000),
         )
-        return json.dumps(tool_output, ensure_ascii=False)
+        tool_output_json = json.dumps(tool_output, ensure_ascii=False)
+        # Development only: the texts hold personal data, so they stay at
+        # debug. The output is what the model reads, a card or a denial too.
+        logger.debug(
+            "tool_call_text",
+            tool_name=tool_name,
+            args=shorten_for_log(json.dumps(model_args, ensure_ascii=False)),
+            output=shorten_for_log(tool_output_json),
+        )
+        return tool_output_json
 
     return FunctionTool(
         name=tool_name,

@@ -7,6 +7,10 @@ G ?=
 # installs requirements.txt with pip and calls these targets with plain python.
 UV := $(shell command -v uv 2>/dev/null)
 RUN := $(if $(UV),uv run,)
+# DEBUG: shows model texts and tool outputs,
+# personal data included, so it is for development only.
+LOG_LEVEL ?= DEBUG
+
 
 help:
 	@echo "make install    - зависимости (uv sync) и requirements.txt"
@@ -80,13 +84,13 @@ seed:
 	$(RUN) python -m core.seed
 
 stand:
-	$(RUN) uvicorn --factory stand:build_app --host 127.0.0.1 --port 8100 --log-level warning
+	LOG_LEVEL=$(LOG_LEVEL) $(RUN) uvicorn --factory stand:build_app --host 127.0.0.1 --port 8100 --log-level warning
 
 api:
-	$(RUN) uvicorn app.main:app --host 127.0.0.1 --port 8000 --log-level warning
+	LOG_LEVEL=$(LOG_LEVEL) $(RUN) uvicorn app.main:app --host 127.0.0.1 --port 8000 --log-level warning
 
 actions:
-	$(RUN) uvicorn actions.server:app --host 127.0.0.1 --port 8220 --log-level warning
+	LOG_LEVEL=$(LOG_LEVEL) $(RUN) uvicorn actions.server:app --host 127.0.0.1 --port 8220 --log-level warning
 
 pdp:
 	$(RUN) uvicorn --factory pdp.service:build_app --host 127.0.0.1 --port 9100 --log-level warning

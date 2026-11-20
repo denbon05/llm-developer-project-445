@@ -42,6 +42,8 @@ PG_DSN = os.environ.get(
     "PG_DSN", "postgresql://operator:operator@127.0.0.1:5434/operator"
 )
 
+# DEBUG also logs model texts and tool outputs, personal data included:
+# development only.
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
 
 TOKEN_TTL_SEC = int(os.environ.get("TOKEN_TTL_SEC", "3600"))

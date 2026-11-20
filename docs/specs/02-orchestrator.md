@@ -146,8 +146,23 @@ middle of an action would leave the action done and unrecorded.
 
 `run_turn` binds `trace_id` and `session_id` to the logging context. Events:
 `turn_started`, `plan_ready`, `llm_run_completed`, `llm_run_empty_output`,
-`turn_finished`, `turn_failed`. Message text, tasks and `reasoning` are never logged. A field is
-logged even when empty, so every event of a kind has the same fields.
+`turn_finished`, `turn_failed`. A field is logged even when empty, so every
+event of a kind has the same fields.
+
+Message text, tasks and `reasoning` are never logged at INFO or above. At DEBUG,
+for development only, two events show the texts, each field cut by
+`shorten_for_log` (`core/logging.py`) to `DEBUG_TEXT_MAX_CHARS` (2000):
+
+- `llm_run_text` from `run_agent`, for every model run: `agent`, `input` (the
+  task, or the newest message of the planner's dialogue), `output` (the
+  report, the reply, or the plan as JSON with its `reasoning`);
+- `tool_call_text` from the tool wrapper: `tool_name`, `args`, `output` (what
+  the model reads: the result, a card, a denial or an error).
+
+They hold personal data (phones, emails), so DEBUG is never for production.
+The journals in the database still hold no text. `make stand`, `make actions`
+and `make api` run at DEBUG (`LOG_LEVEL ?= DEBUG` in the Makefile);
+`LOG_LEVEL=INFO make api` turns it off.
 
 `llm_run_completed` has `tools` and `llm_calls`. Tools requested in one model
 response run concurrently, so `tools` of 2 with `llm_calls` of 2 means one

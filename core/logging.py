@@ -7,6 +7,9 @@ import structlog
 
 from core import config
 
+# The longest text a debug line shows: knowledge base articles are long.
+DEBUG_TEXT_MAX_CHARS = 2000
+
 
 @cache
 def configure_logging() -> None:
@@ -27,6 +30,13 @@ def get_logger(name: str) -> structlog.typing.FilteringBoundLogger:
     """Return a logger whose lines carry `name`."""
     configure_logging()
     return structlog.get_logger(logger_name=name)
+
+
+def shorten_for_log(text: str) -> str:
+    """Return the text cut to DEBUG_TEXT_MAX_CHARS, marked if it was cut."""
+    if len(text) <= DEBUG_TEXT_MAX_CHARS:
+        return text
+    return f"{text[:DEBUG_TEXT_MAX_CHARS]}… [{len(text)} chars]"
 
 
 def make_trace_id() -> str:

@@ -21,10 +21,11 @@ from agents import (
     TResponseInputItem,
 )
 from agents.result import RunResult
+from pydantic import BaseModel
 
 from app import telemetry
 from core import config
-from core.logging import get_logger, read_trace_id
+from core.logging import get_logger, read_trace_id, shorten_for_log
 
 logger = get_logger(__name__)
 
@@ -94,6 +95,22 @@ def collect_tool_calls(result: RunResult) -> list[ToolCall]:
     return tool_calls
 
 
+def read_latest_input(agent_input: str | list[TResponseInputItem]) -> str:
+    """Return the agent's input, or the newest message of a dialogue."""
+    if isinstance(agent_input, str):
+        return agent_input
+    # The planner gets the whole dialogue; its newest message is the turn's.
+    newest_item = cast(dict[str, Any], agent_input[-1]) if agent_input else {}
+    return str(newest_item.get("content", ""))
+
+
+def format_output(final_output: object) -> str:
+    """Return an agent's final output as text: a plan becomes its JSON."""
+    if isinstance(final_output, BaseModel):
+        return final_output.model_dump_json()
+    return str(final_output)
+
+
 async def run_agent(
     agent: Agent, agent_input: str | list[TResponseInputItem]
 ) -> AgentRun:
@@ -124,5 +141,12 @@ async def run_agent(
         input_tokens=usage.input_tokens,
         output_tokens=usage.output_tokens,
         tools=[call.name for call in tool_calls],
+    )
+    # Development only: the texts hold personal data, so they stay at debug.
+    logger.debug(
+        "llm_run_text",
+        agent=agent.name,
+        input=shorten_for_log(read_latest_input(agent_input)),
+        output=shorten_for_log(format_output(result.final_output)),
     )
     return AgentRun(result.final_output, tool_calls, seconds)
