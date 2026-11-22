@@ -51,9 +51,10 @@ Example, anna: «переведи меня на семейный», «да», «
   names, and smoke passes only `who`.
 - `find_card_entries(idempotency_key) -> list[dict]`: a card's entries, oldest
   first.
-- `trace(trace_id) -> list[dict]`: one timeline of the turn from the three
+- `trace(trace_id) -> list[dict]`: one timeline of the turn from four
   tables, by `ts`, then `id`. Each item is the row plus `source` (`audit_log`,
-  `llm_calls`, `tool_calls`). Every audit item also has `card_trace_id`:
+  `llm_calls`, `tool_calls`, and `policy_events`, the PDP's decisions of
+  [06](06-policies.md)). Every audit item also has `card_trace_id`:
   `pending_cards.trace_id` joined on
   `idempotency_key = action || ':' || pending_id`, `None` when the key
   belongs to no card.
@@ -66,8 +67,9 @@ led to.
 
 `python -m app.audit [trace_id]` prints a line with the trace id, then one
 line per item. With no argument it prints the newest trace: the `trace_id` of
-the newest row of the three tables. `make trace T=<trace_id>`, `T` optional.
-An audit line shows `detail` when it has one.
+the newest row of the four tables. `make trace T=<trace_id>`, `T` optional.
+An audit line shows `detail` when it has one, a policy line its reason
+on a Deny.
 
 A card's story spans several turns. When a trace's audit entries are about a
 card, the command prints the trace together with the card's history
@@ -79,13 +81,14 @@ example above:
 ```
 trace tr_c3
 turn tr_a1
-14:05:12 llm_calls  planner  in=812 out=64  1820 ms
-14:05:14 tool_calls prepare_tariff_change  card_created  {"tariff": "семейный"}  95 ms
-14:05:15 llm_calls  tariff  in=1617 out=31  2425 ms
+14:05:12 llm_calls      planner  in=812 out=64  1820 ms
+14:05:14 policy_events  Prepare  Allow
+14:05:14 tool_calls     prepare_tariff_change  card_created  {"tariff": "семейный"}  95 ms
+14:05:15 llm_calls      tariff  in=1617 out=31  2425 ms
 turn tr_b2
-14:05:20 audit_log  executed  tariff_change  Базовый → Семейный  key=tariff_change:p_1a2b
+14:05:20 audit_log      executed  tariff_change  Базовый → Семейный  key=tariff_change:p_1a2b
 turn tr_c3
-14:05:25 audit_log  duplicate_suppressed  tariff_change  key=tariff_change:p_1a2b
+14:05:25 audit_log      duplicate_suppressed  tariff_change  key=tariff_change:p_1a2b
 ```
 
 Two numbers for the whole system:
@@ -159,6 +162,9 @@ finds the key in our check and is `duplicate_suppressed`.
 ### Card answers
 
 - "нет" → `rejected_by_user`.
+- A "да" the policy refused → `denied`, `detail` = the reason; one too late,
+  or a card that expired during a slow turn → `expired`. See
+  [06](06-policies.md).
 - "оператор" → `escalate_card`. A ticket id → `escalated`, `detail` = the
   ticket id. No ticket id → `error`, `detail` `ticket_failed`. An exception
   from the ticket call propagates as before and is not recorded.
@@ -201,8 +207,8 @@ Only for `toggled` and `updated`; a refusal carries neither.
 
 ## Card link
 
-`db/001_pending_cards_trace_id.sql`: `alter table pending_cards add column if
-not exists trace_id text`. `cards.create` stores `session.trace_id`, NULL when
+`db/001_trace_ids.sql`: `alter table pending_cards add column if not exists
+trace_id text` (and the same for `policy_events`, see [06](06-policies.md)). `cards.store_card` stores `session.trace_id`, NULL when
 it's empty. `Card` doesn't change.
 
 ## Tests
@@ -236,9 +242,6 @@ it's empty. `Card` doesn't change.
 - Append-only holds only through the module. A database trigger and separate
   roles would enforce it.
 - The way a card was confirmed (button or typed) is not recorded.
-- `expired` is not written yet: a "да" to an expired card goes to the agents,
-  and a card that expired during a slow turn is only logged (`card_expired`).
-  The policy of step 6 checks the lifetime and refuses.
 - If every attempt of a first "да" fails after billing changed the tariff, the
   journal has `error`, then `duplicate_suppressed` on the next "да", and no
   `executed`. Billing's `tariff_change_log` has the change.
@@ -248,7 +251,6 @@ it's empty. `Card` doesn't change.
 - The ticket note lists every entry of the card, so after a ticket that got
   no id the next note also shows `error (ticket_failed)` as an attempt.
 - A run that raises leaves no `llm_calls` row.
-- Smoke group 3 needs `pep_of` and the PDP of step 6.
 
 ## Acceptance
 
@@ -257,4 +259,4 @@ it's empty. `Card` doesn't change.
   (`before` Базовый, `after` Семейный, the key), then `duplicate_suppressed`.
   `make trace` of the first "да" names the card's trace; that trace shows the
   planner, the `tariff` agent and `prepare_tariff_change` → `card_created`.
-- Smoke group 3's audit checks pass when run without its PDP lines.
+- Smoke group 3 passes with the PDP running ([06](06-policies.md)).

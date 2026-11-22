@@ -1,6 +1,6 @@
 """The tool wrapper checks the allowlist and turns prepare results into cards.
 
-A fake MCP pool stands in for the MCP servers, so no services are needed.
+Fakes stand in for the MCP servers and the PDP, so no services are needed.
 """
 
 import asyncio
@@ -11,7 +11,8 @@ from agents import FunctionToolResult, ToolsToFinalOutputResult
 
 from app import messages, wrap
 from app.cards import Card
-from app.permissions import Allowlist
+from app.pep import Pep
+from app.permissions import Allowlist, Decision
 from app.sessions import Session
 from app.tools import ToolName
 from core import config
@@ -61,6 +62,18 @@ class FakeMcpPool:
     ) -> dict:
         self.call_arguments.append(arguments)
         return self.result_by_tool.get(name, {})
+
+
+class FakePep(Pep):
+    """Gives every stage of a card the same decision, without a PDP."""
+
+    def __init__(self, decision: Decision) -> None:
+        # No PDP session and no tokens: nothing is sent.
+        super().__init__(session_id="", tokens=None)  # pyright: ignore[reportArgumentType]
+        self.decision = decision
+
+    async def request_decision(self, action: str, card: Card) -> Decision:
+        return self.decision
 
 
 def make_session(
@@ -131,31 +144,57 @@ def test_denied_call_never_reaches_the_server():
     assert session.used_tools == []
 
 
-def test_successful_prepare_creates_a_card(monkeypatch):
-    """The model gets a short notice, the card goes to the session."""
-    created_cards = []
-
-    def fake_create(session, action, details, view):
-        card = Card(
-            "p_1", action, details, view, session.session_id, session.user.sub
-        )
-        created_cards.append(card)
-        return card
-
-    monkeypatch.setattr(wrap.cards, "create", fake_create)
+@pytest.mark.parametrize(
+    ("prepare_decision", "expected_stored_details", "expected_run_end"),
+    [
+        # Allowed: the card is stored, and the model reads the notice.
+        (
+            Decision(allowed=True),
+            [{"tariff": "Семейный"}],
+            ToolsToFinalOutputResult(is_final_output=False),
+        ),
+        # No decision from the PDP: no card, and the run ends with the text
+        # for that reason.
+        (
+            Decision(allowed=False, reason="pdp_unavailable"),
+            [],
+            ToolsToFinalOutputResult(
+                is_final_output=True, final_output=messages.CHANGE_UNAVAILABLE
+            ),
+        ),
+    ],
+)
+def test_prepare_stores_a_card_the_policy_allows(
+    monkeypatch, prepare_decision, expected_stored_details, expected_run_end
+):
+    """A card the policy refused never exists."""
+    stored_cards: list[Card] = []
+    monkeypatch.setattr(
+        wrap.cards,
+        "store_card",
+        lambda _session, card: stored_cards.append(card),
+    )
     mcp_pool = FakeMcpPool(
         {ToolName.PREPARE_TARIFF_CHANGE: PREPARE_SCHEMA},
         {ToolName.PREPARE_TARIFF_CHANGE: PREPARED},
     )
-    tool = wrap.build_agent_tool(
-        make_session(mcp_pool), ToolName.PREPARE_TARIFF_CHANGE
-    )
+    session = make_session(mcp_pool)
+    session.pep = FakePep(prepare_decision)
+    tool = wrap.build_agent_tool(session, ToolName.PREPARE_TARIFF_CHANGE)
 
     tool_output = invoke(tool, {"tariff": "семейный"})
 
-    assert tool_output["card_created"] is True
-    assert tool_output["card"] == PREPARED["view"]
-    assert [card.details for card in created_cards] == [{"tariff": "Семейный"}]
+    assert [card.details for card in stored_cards] == expected_stored_details
+    # The SDK passes the step's outputs to the run's stop check.
+    tool_result = FunctionToolResult(
+        tool=None,  # pyright: ignore[reportArgumentType]
+        output=json.dumps(tool_output),
+        run_item=None,  # pyright: ignore[reportArgumentType]
+    )
+    assert (
+        wrap.stop_run_at_denial(None, [tool_result])  # pyright: ignore[reportArgumentType]
+        == expected_run_end
+    )
 
 
 @pytest.mark.parametrize(

@@ -5,7 +5,7 @@ action server reads the subscriber from its verified token. The backend derives
 an allowlist from the token's claims and checks it twice: when it builds the
 agents (barrier 1) and when a model calls a tool (barrier 2). Terms:
 [glossary](../glossary.md). Contracts and cards: [03](03-action-contracts.md).
-The write-path policy comes with the PDP of step 6.
+The write-path policy and its PDP: [06](06-policies.md).
 
 ## Tokens
 

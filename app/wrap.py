@@ -17,13 +17,14 @@ from actions.contracts import (
 )
 from app import audit, cards, messages, permissions, telemetry
 from app.audit import AuditOutcome
-from app.sessions import Session
+from app.pep import PolicyReason
+from app.sessions import Session, pep_of
 from app.tools import ACTION_BY_PREPARE_TOOL, PREPARE_TOOL_NAMES, ToolName
 from core.logging import get_logger, shorten_for_log
 
 logger = get_logger(__name__)
 
-# The error code of a call the allowlist refused.
+# The error code of a call the allowlist or the policy refused.
 DENIED_ERROR = "denied"
 # Arguments that retell the subscriber's words: the journal keeps no dialogue.
 FREE_TEXT_ARGUMENTS = frozenset({"note"})
@@ -36,11 +37,23 @@ CARD_NEXT_STEP = (
 )
 
 
-def create_card(session: Session, prepared: dict) -> dict:
-    """Store a prepared action as the session's card and tell the model."""
-    card = cards.create(
+async def create_card(
+    session: Session, tool_name: str, args: dict, prepared: dict
+) -> dict:
+    """Store a prepared action as the session's card if the policy allows it.
+
+    Return what the model reads: the card, or the denial.
+    """
+    card = cards.build_new_card(
         session, prepared["action"], prepared["details"], prepared["view"]
     )
+    # The PDP decides whether this card may exist at all.
+    decision = await pep_of(session).prepare(card)
+    if not decision.allowed:
+        # Nothing is stored, so the session's previous pending card stays
+        # live.
+        return deny_tool_call(session, tool_name, args, decision.reason)
+    cards.store_card(session, card)
     logger.info("card_created", action=card.action, pending_id=card.pending_id)
     return {"card_created": True, "card": card.view, "next": CARD_NEXT_STEP}
 
@@ -99,7 +112,7 @@ def record_tool_entry(
 def deny_tool_call(
     session: Session, tool_name: str, args: dict, reason: str
 ) -> dict:
-    """Record a call the allowlist refused and return the output for it."""
+    """Record a refused tool call and return the output for it."""
     logger.warning("tool_call_denied", tool_name=tool_name, reason=reason)
     # The arguments keep any identity key: it shows what was attempted.
     record_tool_entry(
@@ -167,12 +180,10 @@ async def call_mcp_tool(
         return args, error_output
     except Exception as error:  # noqa: BLE001 — сбой сервера или его ответа становится данными для модели
         return args, {"error": "tool_failed", "detail": str(error)[:160]}
-    # A prepared action becomes a confirmation card.
+    # A prepared action becomes a confirmation card, if the policy allows it.
     if tool_name in PREPARE_TOOL_NAMES and result.get("ok"):
-        # TODO(права): pass the card through pep.prepare first. On Deny no
-        # card is created and the model gets the refusal with its reason.
         # The card, not the model, carries the change to the subscriber.
-        return args, create_card(session, result)
+        return args, await create_card(session, tool_name, args, result)
     # A ticket hands the request to an operator: the journal keeps it.
     if tool_name == ToolName.CREATE_TICKET and result.get("ticket_id"):
         record_tool_entry(
@@ -239,16 +250,18 @@ def build_agent_tools(
     ]
 
 
-def is_denial(tool_output: object) -> bool:
-    """Tell whether a tool's output is a denied call."""
+def read_denial_reason(tool_output: object) -> str | None:
+    """Return the reason of a denied call's output, or None for other output."""
     try:
         parsed_output = json.loads(str(tool_output))
     except ValueError:
-        return False
-    return (
+        return None
+    if (
         isinstance(parsed_output, dict)
         and parsed_output.get("error") == DENIED_ERROR
-    )
+    ):
+        return str(parsed_output.get("reason", ""))
+    return None
 
 
 def stop_run_at_denial(
@@ -257,12 +270,22 @@ def stop_run_at_denial(
     """End the run with a fixed report once a tool call was denied."""
     # The model never sees the denial, so it can't retry the call with other
     # arguments, such as the same change for the caller's own account.
-    if any(is_denial(tool_result.output) for tool_result in tool_results):
+    for tool_result in tool_results:
+        denial_reason = read_denial_reason(tool_result.output)
+        if denial_reason is None:
+            continue
         # The SDK passes no agent here; in the log this follows the denial
         # and precedes the run's llm_run_completed, which names the agent.
         logger.info("agent_run_stopped", reason=DENIED_ERROR)
+        # Without the PDP no change can be made now, which the subscriber
+        # may try again later; any other denial is final.
+        final_output = (
+            messages.CHANGE_UNAVAILABLE
+            if denial_reason == PolicyReason.PDP_UNAVAILABLE
+            else messages.OPERATION_DENIED
+        )
         return ToolsToFinalOutputResult(
-            is_final_output=True, final_output=messages.OPERATION_DENIED
+            is_final_output=True, final_output=final_output
         )
     # Otherwise the model reads the outputs and goes on.
     return ToolsToFinalOutputResult(is_final_output=False)

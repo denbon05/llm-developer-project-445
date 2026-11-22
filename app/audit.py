@@ -128,10 +128,11 @@ def find_card_entries(idempotency_key: str) -> list[dict]:
 
 
 def trace(trace_id: str) -> list[dict]:
-    """Return the trace's audit entries, LLM calls and tool calls by time.
+    """Return the trace's rows of the four journals, in time order.
 
-    Each item is a table row plus `source`, the table's name. An audit entry
-    also has `card_trace_id`: the trace that created its card, if any.
+    Each item is a table row plus `source`, the table's name: audit entries,
+    LLM calls, tool calls and policy decisions. An audit entry also has
+    `card_trace_id`: the trace that created its card, if any.
     """
     audit_entries = db.fetchall(
         """
@@ -160,16 +161,28 @@ def trace(trace_id: str) -> list[dict]:
         """,
         (trace_id,),
     )
+    policy_decisions = db.fetchall(
+        """
+        select *
+        from policy_events
+        where trace_id = %s
+        """,
+        (trace_id,),
+    )
     timeline = [
         *({**entry, "source": "audit_log"} for entry in audit_entries),
         *({**llm_call, "source": "llm_calls"} for llm_call in llm_calls),
         *({**tool_call, "source": "tool_calls"} for tool_call in tool_calls),
+        *(
+            {**policy_decision, "source": "policy_events"}
+            for policy_decision in policy_decisions
+        ),
     ]
     return sorted(timeline, key=lambda item: (item["ts"], item["id"]))
 
 
 def find_newest_trace_id() -> str | None:
-    """Return the trace id of the newest row of the three tables."""
+    """Return the trace id of the newest row of the four tables."""
     newest_row = db.fetchone(
         """
         select trace_id
@@ -179,6 +192,8 @@ def find_newest_trace_id() -> str | None:
             select trace_id, ts from llm_calls
             union all
             select trace_id, ts from tool_calls
+            union all
+            select trace_id, ts from policy_events
         ) as trace_rows
         where trace_id is not null
         order by ts desc
@@ -210,6 +225,11 @@ def format_trace_item(item: dict) -> str:
             format_value(item["args"]),
             f"{item['latency_ms']} ms",
         ]
+    elif item["source"] == "policy_events":
+        fields = [item["action"], item["decision"]]
+        # An Allow has no reason.
+        if item["reason"]:
+            fields.append(item["reason"])
     else:
         fields = [item["outcome"], item["what"]]
         # `before` may be False, so compare with None.
@@ -223,7 +243,7 @@ def format_trace_item(item: dict) -> str:
         if item["idempotency_key"]:
             fields.append(f"key={item['idempotency_key']}")
     time_of_day = item["ts"].astimezone().strftime("%H:%M:%S")
-    return f"{time_of_day} {item['source']:<10} " + "  ".join(fields)
+    return f"{time_of_day} {item['source']:<14} " + "  ".join(fields)
 
 
 def find_card_history(idempotency_key: str, card_trace_id: str) -> list[dict]:

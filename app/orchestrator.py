@@ -4,10 +4,6 @@ A turn is one subscriber message. The orchestrator decides which agents run and
 collects the turn's events for the browser. An answer to a live confirmation
 card is handled by code, without the model.
 
-TODO(права) — права: «да» → PEP: pep.confirm → pep.execute; при Deny —
-  человекочитаемый отказ по reason (session_limit, confirmation_expired,
-  card_not_prepared, pdp_unavailable).
-
 TODO(guardrail) — guardrail: input-проверка реплики до всего хода (unsafe →
   отказ, запись в аудит); output-проверка ответа и карточки до показа;
   недоступный сервис → session.guard_state["ok"] = False (fail-closed
@@ -40,6 +36,7 @@ from app.editor import (
     remove_unknown_citations,
 )
 from app.llm import AgentRun, run_agent
+from app.pep import PolicyReason
 from app.planner import (
     Plan,
     Step,
@@ -47,7 +44,7 @@ from app.planner import (
     propose_plan,
     restrict_plan,
 )
-from app.sessions import Session
+from app.sessions import Session, pep_of
 from app.tools import PREPARE_TOOL_NAMES, ToolName
 from app.workers import build_worker_agents
 from core.logging import get_logger, make_trace_id
@@ -87,6 +84,13 @@ REFUSED_AT_EXECUTION_OUTCOMES = frozenset(
 )
 BILLING_RETRY_DETAIL = "billing had the key: the call was retried"
 TICKET_FAILED_DETAIL = "ticket_failed"
+# The reply to a "да" the policy refused, by the refusal's reason. Any other
+# reason gets messages.OPERATION_DENIED.
+REFUSAL_REPLY_BY_REASON: dict[str, str] = {
+    PolicyReason.SESSION_LIMIT: messages.SESSION_TARIFF_LIMIT,
+    PolicyReason.PDP_UNAVAILABLE: messages.CHANGE_UNAVAILABLE_RETRY,
+    PolicyReason.CARD_NOT_PREPARED: messages.CARD_NOT_PREPARED,
+}
 
 
 async def make_plan(session: Session, message: str) -> Plan:
@@ -325,6 +329,40 @@ async def execute_pending(session: Session, card: Card) -> str:
     return messages.build_execution_reply(result)
 
 
+def settle_expired_card(session: Session, card: Card) -> None:
+    """Record that the card's lifetime ended before it was confirmed."""
+    cards.settle_card(card, CardState.EXPIRED)
+    record_card_entry(session, card, AuditOutcome.EXPIRED)
+
+
+def refuse_confirmation(session: Session, card: Card, reason: str) -> str:
+    """Record the policy's refusal of a "да" and return the reply for it."""
+    if reason == PolicyReason.CONFIRMATION_EXPIRED:
+        # A confirmed card has run, so it stays confirmed. The PDP starts a
+        # card's lifetime a few ms before the database does, so a repeated
+        # "да" at the very end of the lifetime can get here.
+        if card.state == CardState.PENDING:
+            settle_expired_card(session, card)
+        return messages.CARD_EXPIRED
+    # The card stays pending: «оператор» can still turn it into a ticket, and
+    # its note lists this refusal among the attempts.
+    record_card_entry(session, card, AuditOutcome.DENIED, detail=reason)
+    return REFUSAL_REPLY_BY_REASON.get(reason, messages.OPERATION_DENIED)
+
+
+async def confirm_and_execute(session: Session, card: Card) -> str:
+    """Execute the card if the policy allows the "да"; return the reply."""
+    pep = pep_of(session)
+    # The PDP decides each stage: first whether the "да" confirms this card,
+    # then whether the confirmed card may run.
+    decision = await pep.confirm(card)
+    if decision.allowed:
+        decision = await pep.execute(card)
+    if not decision.allowed:
+        return refuse_confirmation(session, card, decision.reason)
+    return await execute_pending(session, card)
+
+
 def format_attempt(entry: dict) -> str:
     """Return an audit entry as `outcome (detail)`."""
     if entry["detail"]:
@@ -390,20 +428,19 @@ async def apply_card_answer(
     """
     if card is None:
         return None
-    # A second "да" for a card confirmed a moment ago, typed or pressed. Its
-    # key holds the result, so the reply is «уже исполнено» and nothing runs
-    # twice. Once the card expired, a "да" no longer refers to it.
-    # POST-QA: drop is_repeated_yes for the simple flow: only a live card
-    # takes answers, a later "да" goes to the agents, the idempotency key
-    # still stops a repeat, and the web chat disables the card's buttons once
-    # the card is answered.
-    is_repeated_yes = (
-        answer is CardAnswer.YES
-        and card.state == CardState.CONFIRMED
-        and not card.is_expired
+    # A "да" to a pending card goes to the policy also once the card expired:
+    # the PDP's clock decides whether it is too late. A "да" to a card
+    # confirmed a moment ago goes there too: it takes no new slot of the
+    # limit, and its key gives the reply «уже исполнено».
+    # POST-QA: for the simple flow only a live card takes answers: a later
+    # "да" goes to the agents, the idempotency key still stops a repeat, and
+    # the web chat disables the card's buttons once the card is answered.
+    is_yes_to_card = answer is CardAnswer.YES and (
+        card.state == CardState.PENDING
+        or (card.state == CardState.CONFIRMED and not card.is_expired)
     )
     # Rejected, replaced and expired cards take no answers.
-    if not card.is_live and not is_repeated_yes:
+    if not card.is_live and not is_yes_to_card:
         return None
 
     logger.info(
@@ -416,9 +453,10 @@ async def apply_card_answer(
         # Not an answer to the card: the agents take the message and the card
         # stays live.
         return None
-    # "да" executes the card, "позови оператора" turns it into a ticket.
+    # "да" executes the card if the policy allows, "позови оператора" turns
+    # it into a ticket.
     if answer is CardAnswer.YES:
-        return await execute_pending(session, card)
+        return await confirm_and_execute(session, card)
     if answer is CardAnswer.OPERATOR:
         return await escalate_card(session, card)
     # "нет" cancels the card.
@@ -546,9 +584,9 @@ async def send_card_and_ticket_replies(
     ):
         # A slow turn outlived the card: it can't be answered any more, so
         # it isn't shown, and the subscriber learns why. Other states (a
-        # refusal by the policy or the guardrail of later steps) need their
-        # own reply.
+        # refusal by the guardrail of a later step) need their own reply.
         logger.info("card_expired", pending_id=current_card.pending_id)
+        settle_expired_card(session, current_card)
         await emit(
             {"type": "reply", "text": messages.CARD_EXPIRED, "sources": []}
         )

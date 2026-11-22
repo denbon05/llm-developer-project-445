@@ -1,21 +1,72 @@
-// Политики write-пути агента мобильного оператора (Dogwood: Cedar + temporal).
+// Write-path policies: a card is prepared, confirmed by a "да", then executed.
 //
-// TODO(права): написать политики «да — что да?» (схема действий — в
-// schema.cedarschema, действия Prepare / ConfirmCard / Execute):
+// Cedar semantics: a request is denied unless a permit matches it, and a
+// matching forbid beats every permit. The PDP keeps one history of requests
+// per chat session, so the temporal rules see only that session's requests,
+// allowed and denied alike.
+
+// 1. Only a client with the write scope may prepare a card. The input must
+// not name a subscriber: the subject comes from the token. The PDP checks
+// only the policy against the schema, not the requests, so these checks are
+// the only ones that refuse such a key.
+permit (principal, action == Tel::Action::"Prepare", resource)
+when {
+    context.input.role == "client"
+    && context.input.scopes.contains("tariffs:write")
+    && !(context.input has user_id)
+    && !(context.input has account)
+    && !(context.input has subscriber)
+    && !(context.input has msisdn)
+};
+
+// 2. A "да" confirms only a card prepared earlier in the session, with the
+// same id, action and details: it can't confirm a card nobody was shown.
+// The window never closes in the running PDP (its events carry no time), so
+// the PDP checks the card's lifetime itself.
 //
-//   1. permit Prepare — клиент с tariffs:write; guard-условия:
-//      identity-ключи (user_id/account/subscriber) в аргументах не
-//      существуют; с guardrail — ещё context.input.guard_ok.
-//   2. permit ConfirmCard — та же карточка готовилась недавно:
-//      when temporal { formerly within 1h
-//          Tel::Action::"Prepare"::request{ input.pending_id:
-//          context.input.pending_id } }.
-//   3. permit Execute — formerly within 1h ConfirmCard той же карточки.
-//   4. forbid-лимит — не более двух смен тарифа за окно сессии:
-//      count_within(24h, Execute::request{ input.action:
-//      "tariff_change" }) > 2.
-//
-// Семантика Cedar: deny by default, forbid перекрывает permit.
-// Пустая политика валидна: PDP стартует и всё запрещает (deny by
-// default) — начинайте с permit Prepare и смотрите reason'ы в
-// policy_events.
+// POST-QA: let the policy check the card's lifetime. The PDP stamps its clock
+// into every request (input.now, seconds) and a Prepare's deadline
+// (input.expires_at = now + CARD_TTL_SEC); the schema gains both as Long.
+// This rule binds the deadline the Prepare recorded and compares it, checked
+// on dogwood-py 0.0.12:
+//     exists (deadline: Long).
+//         (formerly within 1h Tel::Action::"Prepare"::request{
+//             ..., input.expires_at: deadline })
+//         && deadline >= context.input.now
+// Rule 3 gets the same check, or a refused late "да" in the history would
+// open Execute. Then the clock check in PolicyService.confirm goes.
+// `within 1h` stays: Dogwood requires a window after `formerly`. Not before
+// QA: the course checks the windows with replays, and a replayed event
+// without these fields would get Deny.
+permit (principal, action == Tel::Action::"ConfirmCard", resource)
+when temporal {
+    formerly within 1h Tel::Action::"Prepare"::request{
+        input.pending_id: context.input.pending_id,
+        input.action: context.input.action,
+        input.details: context.input.details
+    }
+};
+
+// 3. Only a confirmed card runs: the same card had a ConfirmCard before.
+permit (principal, action == Tel::Action::"Execute", resource)
+when temporal {
+    formerly within 1h Tel::Action::"ConfirmCard"::request{
+        input.pending_id: context.input.pending_id,
+        input.action: context.input.action,
+        input.details: context.input.details
+    }
+};
+
+// 4. At most two tariff changes per session. count_distinct_within counts
+// distinct values of `card`, the pending_id: a repeated "да" or a retry of
+// one card takes one slot. The current request counts too, so the third
+// card is refused. The first condition keeps services and contacts out of
+// the limit.
+forbid (principal, action == Tel::Action::"Execute", resource)
+when { context.input.action == "tariff_change" }
+when temporal {
+    count_distinct_within(card, 24h, Tel::Action::"Execute"::request{
+        input.action: "tariff_change",
+        input.pending_id: card
+    }) > 2
+};

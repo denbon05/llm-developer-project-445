@@ -112,9 +112,10 @@ twice is harmless.
 
 - The model's arguments reach the server as sent, after the allowlist checks
   of [05](05-permissions.md). No tool takes the subscriber as an argument.
-- A successful `prepare_*` → `cards.create(...)` → the model gets
-  `{"card_created": true, "card": <view>, "next": ...}`. Errors stay JSON with
-  `error` and the data.
+- A successful `prepare_*` → `cards.build_new_card(...)`, the PEP's `prepare`
+  ([06](06-policies.md)), on Allow `cards.store_card(...)` → the model gets
+  `{"card_created": true, "card": <view>, "next": ...}`. On Deny nothing is
+  stored and the call is denied. Errors stay JSON with `error` and the data.
 
 ## Turn with cards
 
@@ -130,20 +131,22 @@ presses alike:
 
 | Newest card | Answer | Result |
 | --- | --- | --- |
-| live | yes | `execute_pending` |
+| live | yes | `confirm_and_execute`: the PEP's `confirm`, then `execute`, then `execute_pending` |
+| `pending`, expired | yes | `confirm_and_execute`: the PDP's clock decides, expect `confirmation_expired` |
 | live | no | settle `rejected`, `Отменил, ничего не изменилось.` |
 | live | operator | `create_ticket` by code, then settle `rejected`, reply with the ticket id |
 | live | topic | normal turn, the card stays live |
-| `confirmed`, time left | yes | `execute_pending`: the key is taken, so the duplicate reply and nothing runs twice |
+| `confirmed`, time left | yes | `confirm_and_execute`: same card, no new slot of the limit; the key is taken, so the duplicate reply and nothing runs twice |
 | `confirmed` | anything but yes | normal turn |
-| anything else (none, expired, rejected, replaced) | anything | normal turn |
+| anything else (none, `expired`, rejected, replaced) | anything | normal turn |
 
 The course asks for this: «да», «да» gives `executed` and then
-`duplicate_suppressed` (step 4). The repeat window is the card's lifetime, not
-"the next message", so no session state remembers a confirmed card. A "да"
-with no card or after the card's lifetime goes to the agents for now. For the
-policy of step 6 to refuse it, step 6 has to ask the PEP before
-`apply_card_answer` returns early (see "Known issues").
+`duplicate_suppressed` (step 4), and every "да" goes through the policy
+(step 6). The repeat window is the card's lifetime, not "the next message", so
+no session state remembers a confirmed card. A "да" to a pending card past its
+lifetime reaches the PDP, which refuses it: the card is settled `expired`, and
+a later "да" goes to the agents, as one with no card does. The refusals and
+their replies are in [06](06-policies.md).
 
 After the agents, code writes the parts a model must not retell: card prices
 and ticket ids (a small model turned `t_1674` into «ТЗ-1674»). A run is
@@ -159,9 +162,11 @@ answered by code if a `prepare_*` call returned `card_created`, or a
    editor so its state and seconds left are current: if it is live,
    `{"type": "card", "pending_id", "card": public_view()}` with the seconds it
    has left, then `reply` with `CARD_READY`; if it is `pending` but expired
-   during a slow turn, only `reply` with `CARD_EXPIRED`, so nobody is asked to
-   confirm a card that can't be answered. A new card in another state (a
-   refusal by the policy or the guardrail of later steps) needs its own reply.
+   during a slow turn, settle it `expired` with an audit entry `expired` and
+   only `reply` with `CARD_EXPIRED`, so nobody is asked to confirm a card that
+   can't be answered. A card the policy refused is never stored. A new card in
+   another state (a refusal by the guardrail of a later step) needs its own
+   reply.
 
 A failed `prepare_*` or `create_ticket` gives no card or id, and its report goes
 to the editor as usual. The planner history gets the texts sent, joined by a
@@ -249,8 +254,9 @@ card shown, or empty) and `tickets` (count). No message text.
   The session cache is gone (`active()` returned a cached card even after it
   expired and wrote the cache as a side effect). Queries change nothing:
   `find_latest_card(session_id)`, `find_card(session_id, pending_id)`.
-  Commands change the table: `create` (name and signature kept, Hexlet's smoke
-  checks call it), `settle_card(card, state)`. `Card` carries its `state`
+  Commands change the table: `store_card(session, card)` (a card from
+  `build_new_card`, which only builds it in memory), `create` = both (name and
+  signature kept, Hexlet's smoke checks call it), `settle_card(card, state)`. `Card` carries its `state`
   (a `CardState`; an unknown state fails when the row is read) and
   `seconds_left`, counted by the database, which also sets `expires_at`.
   `public_view()` takes no TTL: it shows the seconds left. The answer phrases
@@ -273,7 +279,6 @@ card shown, or empty) and `tickets` (count). No message text.
   show its rows in another order.
 - Two sessions using one key at the same moment could both run; the lock is
   per session. Only tariff changes have the billing barrier behind it.
-- Smoke group 3 also needs the PEP and the PDP.
 - `Session` is mutable state in the memory of one process, and any function
   that gets it can change any field. It is lost on restart and can't be shared
   between workers. Only the cards are durable (`pending_cards`).
@@ -288,21 +293,9 @@ card shown, or empty) and `tickets` (count). No message text.
   every "да" to go through the card path (steps 4 and 6).
 - Card state changes are not guarded in the database: `settle_card` updates
   from any state, and "one pending card per session" is a convention of
-  `create`. Correct today because every caller holds `turn_lock`; to revisit
-  with the policy of step 6.
-- A new card replaces the session's pending one before the policy approves
-  it; a denied card (steps 6–7) would leave the session with none.
+  `store_card`. Correct today because every caller holds `turn_lock`.
 - The decision endpoint reports the requested answer as `outcome`, also when
   execution failed, and "нет" to a confirmed card gets the 404 text.
-- Step 6: `apply_card_answer` returns `None` for a missing or expired card
-  before any PEP call, so the PDP's `card_not_prepared` and
-  `confirmation_expired` can't fire from the chat. Step 6 must ask the PEP
-  before that return, or reply `CARD_EXPIRED` itself.
-- Step 6: the PDP counts every `Execute` request toward the session's
-  tariff-change limit, and a repeated "да" calls `execute_pending` again. So
-  «смени», «да», «да» would use up two changes. Check the idempotency key
-  before asking the PEP, not `card.state` (smoke passes the object `create`
-  returned, which stays `pending`).
 - Steps 6–7: every turn reads the session's newest card, and `build_card`
   fails on a state that `CardState` doesn't know. Writing such a state (for
   example a raw "denied") would break every later turn of the session. Add a

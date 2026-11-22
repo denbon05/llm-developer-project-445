@@ -61,8 +61,8 @@ lint:
 	uv run ruff format --check $(F)
 	uv run pylint $(F)
 
-# tests/smoke.py is left out while it calls functions not written yet
-# (`pep_of`, `guardrail_client.check`).
+# tests/smoke.py is left out while it calls a function not written yet
+# (`guardrail_client.check`).
 typecheck:
 	uv run basedpyright app actions core services pdp guardrail kb scripts stand.py tests/unit tests/integration
 
@@ -83,6 +83,9 @@ migrate:
 seed:
 	$(RUN) python -m core.seed
 
+# Each service gets two log levels: LOG_LEVEL for our own lines (structlog,
+# core/logging.py), --log-level for uvicorn's; warning hides its line per
+# HTTP request.
 stand:
 	LOG_LEVEL=$(LOG_LEVEL) $(RUN) uvicorn --factory stand:build_app --host 127.0.0.1 --port 8100 --log-level warning
 
@@ -93,7 +96,7 @@ actions:
 	LOG_LEVEL=$(LOG_LEVEL) $(RUN) uvicorn actions.server:app --host 127.0.0.1 --port 8220 --log-level warning
 
 pdp:
-	$(RUN) uvicorn --factory pdp.service:build_app --host 127.0.0.1 --port 9100 --log-level warning
+	LOG_LEVEL=$(LOG_LEVEL) $(RUN) uvicorn --factory pdp.service:build_app --host 127.0.0.1 --port 9100 --log-level warning
 
 guardrail:
 	$(RUN) uvicorn --factory guardrail.service:build_app --host 127.0.0.1 --port 8300 --log-level warning

@@ -31,7 +31,8 @@ def empty_tables() -> None:
     # roll its changes back; emptying the tables isolates the tests instead.
     db.execute(
         """
-        truncate audit_log, llm_calls, tool_calls, pending_cards, idempotency
+        truncate audit_log, llm_calls, tool_calls, policy_events,
+            pending_cards, idempotency
         restart identity
         """
     )

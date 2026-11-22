@@ -4,6 +4,7 @@ import pytest
 
 from app import audit, cards, orchestrator, telemetry
 from core.logging import make_trace_id
+from pdp.service import _audit as record_policy_decision
 from tests.integration.fake_mcp import FakeMcpPool, make_session
 
 SUBSCRIBER_ID = "u_1111"
@@ -11,7 +12,7 @@ OTHER_SUBSCRIBER_ID = "u_2222"
 
 
 def test_trace_lists_a_turns_records_in_time_order():
-    """Model runs, tool calls and audit entries; a card entry names its turn."""
+    """Every journal's rows of the turn; a card entry names its card's turn."""
     # A card created in an earlier turn, the one of card_session: its row
     # keeps that turn's trace id. Only the trace id matters here; create()
     # also needs details and a view, whatever they are.
@@ -25,10 +26,14 @@ def test_trace_lists_a_turns_records_in_time_order():
     # The turn under test.
     trace_id = make_trace_id()
 
-    # Five records of the turn, in this order: a model run, a tool call, then
-    # three audit entries. Only the first entry is about the card.
+    # Six records of the turn, in this order: a model run, a tool call, the
+    # PDP's decision, then three audit entries. Only the first entry is about
+    # the card.
     telemetry.record_llm_call(trace_id, "planner", "test-model", 812, 64, 1820)
     telemetry.record_tool_call(trace_id, "get_my_tariff", {}, "ok", 95)
+    record_policy_decision(
+        "sess_1a2b3c4d", SUBSCRIBER_ID, "Execute", "Allow", "", trace_id
+    )
     audit.append(
         SUBSCRIBER_ID,
         "tariff_change",
@@ -53,14 +58,16 @@ def test_trace_lists_a_turns_records_in_time_order():
 
     timeline = audit.trace(trace_id)
 
-    # The three tables come back as one list, in the order they were written.
+    # The four tables come back as one list, in the order they were written.
     # Only the entry with the card's key points to the turn that created the
-    # card; the other entries have None, and telemetry rows have no such field.
+    # card; the other entries have None, and the other rows have no such
+    # field.
     assert [
         (item["source"], item.get("card_trace_id")) for item in timeline
     ] == [
         ("llm_calls", None),
         ("tool_calls", None),
+        ("policy_events", None),
         ("audit_log", card_session.trace_id),
         ("audit_log", None),
         ("audit_log", None),

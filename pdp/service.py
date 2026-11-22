@@ -62,13 +62,26 @@ IDENTITY_KEYS = ("user_id", "account", "subscriber", "msisdn")
 
 
 def _audit(
-    session_id: str, sub: str, action: str, decision: str, reason: str
+    session_id: str,
+    sub: str,
+    action: str,
+    decision: str,
+    reason: str,
+    trace_id: str | None,
 ) -> None:
+    logger.info(
+        "policy_decision",
+        session_id=session_id,
+        action=action,
+        decision=decision,
+        reason=reason,
+    )
     try:
         db.execute(
-            "insert into policy_events(session_id, sub, action, decision, reason)"
-            " values (%s, %s, %s, %s, %s)",
-            (session_id, sub, action, decision, reason),
+            "insert into policy_events("
+            "session_id, sub, action, decision, reason, trace_id)"
+            " values (%s, %s, %s, %s, %s, %s)",
+            (session_id, sub, action, decision, reason, trace_id),
         )
     except Exception:  # A failed decision log must not bring the service down.
         logger.exception(
@@ -76,6 +89,8 @@ def _audit(
         )
 
 
+# POST-QA: rename to PdpSession: app.sessions.Session is the chat's session,
+# this is the PDP's state for it.
 @dataclass
 class Session:
     session_id: str
@@ -118,7 +133,13 @@ class PolicyService:
         session.last_seen = time.monotonic()
         return session
 
-    def _authorize(self, session: Session, action: str, payload: dict) -> dict:
+    def _authorize(
+        self,
+        session: Session,
+        action: str,
+        payload: dict,
+        trace_id: str | None,
+    ) -> dict:
         verdict = session.authorizer.authorize_request(
             f"Tel::Action::{action}",
             self._principal(session),
@@ -132,14 +153,21 @@ class PolicyService:
             else self._explain(session, action, payload)
         )
         _audit(
-            session.session_id, session.subject["sub"], action, decision, reason
+            session.session_id,
+            session.subject["sub"],
+            action,
+            decision,
+            reason,
+            trace_id,
         )
         return {"decision": decision, "reason": reason}
 
-    def prepare(self, session_id: str, payload: dict) -> dict:
+    def prepare(
+        self, session_id: str, payload: dict, trace_id: str | None = None
+    ) -> dict:
         """Prepare: решение политики; Allow фиксирует карточку в журнале."""
         session = self._session(session_id)
-        result = self._authorize(session, "Prepare", payload)
+        result = self._authorize(session, "Prepare", payload, trace_id)
         if result["decision"] == "Allow":
             session.cards[payload["pending_id"]] = {
                 "action": payload.get("action"),
@@ -147,7 +175,9 @@ class PolicyService:
             }
         return result
 
-    def confirm(self, session_id: str, payload: dict) -> dict:
+    def confirm(
+        self, session_id: str, payload: dict, trace_id: str | None = None
+    ) -> dict:
         """«Да» по карточке: сервисные факты → политика → событие в историю.
 
         Событие запроса пишется в историю политики даже при Deny — поэтому
@@ -162,29 +192,37 @@ class PolicyService:
         card = session.cards.get(pending_id)
         if card is None:
             result = {"decision": "Deny", "reason": "card_not_prepared"}
+        # POST-QA: the policy checks the deadline instead (see the POST-QA
+        # note at rule 2 in policies/tariff.dw), and this branch goes.
         elif time.monotonic() - card["ts"] > CARD_TTL_SEC:
             result = {"decision": "Deny", "reason": "confirmation_expired"}
         else:
-            result = self._authorize(session, "ConfirmCard", payload)
+            # _authorize logs the policy's decision itself: one row per request.
+            result = self._authorize(session, "ConfirmCard", payload, trace_id)
             if result["decision"] == "Allow":
                 session.confirmations[pending_id] = {
                     "action": payload.get("action"),
                     "ts": time.monotonic(),
                 }
+            return result
+        # The service's own refusals never reach the policy: logged here.
         _audit(
             session.session_id,
             session.subject["sub"],
             "ConfirmCard",
             result["decision"],
             result["reason"],
+            trace_id,
         )
         return result
 
-    def execute(self, session_id: str, payload: dict) -> dict:
+    def execute(
+        self, session_id: str, payload: dict, trace_id: str | None = None
+    ) -> dict:
         """Execute: решение политики (окно ConfirmCard + лимит — forbid)."""
         session = self._session(session_id)
         session.execute_requests += 1
-        return self._authorize(session, "Execute", payload)
+        return self._authorize(session, "Execute", payload, trace_id)
 
     def _explain(self, session: Session, action: str, payload: dict) -> str:
         """Reason у Deny: биндинг отдаёт только строку, причину называет сервис."""
@@ -239,11 +277,17 @@ async def authorize(request: Request) -> JSONResponse:
     action = body.get("action", "")
     if action not in ("Prepare", "Execute"):
         return JSONResponse({"error": "unknown_action"}, status_code=400)
+    # The turn that asked, for the decision journal; the policy never reads it.
+    trace_id = body.get("trace_id")
     try:
         if action == "Prepare":
-            result = SERVICE.prepare(body["session_id"], body.get("input", {}))
+            result = SERVICE.prepare(
+                body["session_id"], body.get("input", {}), trace_id
+            )
         else:
-            result = SERVICE.execute(body["session_id"], body.get("input", {}))
+            result = SERVICE.execute(
+                body["session_id"], body.get("input", {}), trace_id
+            )
     except KeyError as error:
         return JSONResponse({"error": str(error)}, status_code=404)
     return JSONResponse(result)
@@ -252,7 +296,9 @@ async def authorize(request: Request) -> JSONResponse:
 async def confirm(request: Request) -> JSONResponse:
     body = await request.json()
     try:
-        result = SERVICE.confirm(body["session_id"], body.get("input", {}))
+        result = SERVICE.confirm(
+            body["session_id"], body.get("input", {}), body.get("trace_id")
+        )
     except KeyError as error:
         return JSONResponse({"error": str(error)}, status_code=404)
     return JSONResponse(result)

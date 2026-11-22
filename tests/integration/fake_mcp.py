@@ -1,9 +1,10 @@
-"""A fake MCP pool and a session backed by it, shared by the tests here."""
+"""A fake MCP pool and a session that uses it and a fake PEP."""
 
 from app import permissions
 from app.sessions import Session
 from core import config
 from core.logging import make_trace_id
+from tests.integration.fake_pep import FakePep
 
 # What anna's token allows: the claims the issuer puts in it.
 ANNA_ALLOWLIST = permissions.allowlist_from_claims(
@@ -44,7 +45,10 @@ class FakeMcpPool:
 
 
 def make_session(mcp_pool: FakeMcpPool) -> Session:
-    """Return a new session of anna backed by the fake MCP pool."""
+    """Return a new session of anna backed by the fake MCP pool.
+
+    Its PEP allows every stage; a test may put another fake in `pep`.
+    """
     return Session(
         login="anna",
         user=config.USERS["anna"],
@@ -54,4 +58,5 @@ def make_session(mcp_pool: FakeMcpPool) -> Session:
         allowlist=ANNA_ALLOWLIST,
         # A trace of its own, so a test finds the rows its session wrote.
         trace_id=make_trace_id(),
+        pep=FakePep(),
     )

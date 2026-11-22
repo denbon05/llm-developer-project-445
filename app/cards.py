@@ -6,9 +6,12 @@ import json
 import uuid
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from core import config, db
+
+if TYPE_CHECKING:
+    from app.sessions import Session
 
 # The columns build_card reads, in every query that returns cards. The
 # database counts the seconds left, with the same clock that set expires_at.
@@ -26,6 +29,7 @@ class CardState(StrEnum):
     CONFIRMED = "confirmed"  # "да", and the account has the change
     REJECTED = "rejected"  # "нет", or handed to an operator
     REPLACED = "replaced"  # a newer card of the session took its place
+    EXPIRED = "expired"  # its lifetime ended before a "да" could confirm it
 
 
 @dataclass
@@ -66,10 +70,22 @@ def to_json(value: dict) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
-# POST-QA: rename to create_card. tests/smoke.py calls this name.
-def create(session, action: str, details: dict, view: dict) -> Card:
-    """Store a new pending card for the session and return it."""
-    pending_id = f"p_{uuid.uuid4().hex[:8]}"
+def build_new_card(
+    session: Session, action: str, details: dict, view: dict
+) -> Card:
+    """Return a new pending card for the session, not stored yet."""
+    return Card(
+        pending_id=f"p_{uuid.uuid4().hex[:8]}",
+        action=action,
+        details=details,
+        view=view,
+        session_id=session.session_id,
+        sub=session.user.sub,
+    )
+
+
+def store_card(session: Session, card: Card) -> None:
+    """Store the card as the session's pending one."""
     with db.connect() as conn, conn.cursor() as cur:
         # A session waits for one answer at a time: the new card replaces
         # the one still pending.
@@ -79,7 +95,7 @@ def create(session, action: str, details: dict, view: dict) -> Card:
             set state = %s
             where session_id = %s and state = %s
             """,
-            (CardState.REPLACED, session.session_id, CardState.PENDING),
+            (CardState.REPLACED, card.session_id, CardState.PENDING),
         )
         cur.execute(
             """
@@ -93,21 +109,28 @@ def create(session, action: str, details: dict, view: dict) -> Card:
             )
             """,
             (
-                pending_id,
-                session.session_id,
-                session.user.sub,
-                action,
-                to_json(details),
-                to_json(view),
+                card.pending_id,
+                card.session_id,
+                card.sub,
+                card.action,
+                to_json(card.details),
+                to_json(card.view),
                 # The turn that created the card, NULL outside a turn.
                 session.trace_id or None,
                 config.CARD_TTL_SEC,
             ),
         )
         conn.commit()
-    return Card(
-        pending_id, action, details, view, session.session_id, session.user.sub
-    )
+
+
+# Only Hexlet's tests/smoke.py and our tests call this: the app stores a card
+# after the PDP allows it.
+# POST-QA: remove; the callers use build_new_card and store_card.
+def create(session: Session, action: str, details: dict, view: dict) -> Card:
+    """Store a new pending card for the session and return it."""
+    card = build_new_card(session, action, details, view)
+    store_card(session, card)
+    return card
 
 
 def build_card(card_row: dict) -> Card:

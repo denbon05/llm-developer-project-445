@@ -4,10 +4,7 @@
 доверенный клиент — выпускает у издателя токены для всех MCP-серверов
 (по одному на resource, RFC 8707) и держит открытые соединения.
 
-В правах вы ДОПОЛНИТЕ Session полями pep / guard_state: pep — клиент PDP
-(app.pep, лениво), guard_state — verdikt guardrail хода. Там же функция
-pep_of(session) — отдаёт PEP сессии, создавая его при первом обращении (её
-зовёт оркестратор и smoke).
+В guardrail вы ДОПОЛНИТЕ Session полем guard_state — verdikt guardrail хода.
 """
 
 from __future__ import annotations
@@ -20,6 +17,7 @@ from typing import TYPE_CHECKING
 from agents import Agent, TResponseInputItem
 
 from app import permissions
+from app.pep import Pep
 from core import config, db
 from core.logging import get_logger
 from core.mcpclient import McpPool
@@ -49,6 +47,8 @@ class Session:
     dropped_steps: list[DroppedStep] = field(default_factory=list)
     trace_id: str = ""  # сквозной id текущего хода
     planner: Agent | None = None  # built on the first turn
+    # Asks the policy service before each stage of a card; see pep_of.
+    pep: Pep | None = None
     # One turn or card decision at a time: two "да" at once must not both
     # pass the idempotency check before either records its key.
     turn_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -109,3 +109,10 @@ async def open_session(login: str) -> Session:
 
 def get(session_id: str) -> Session | None:
     return SESSIONS.get(session_id)
+
+
+def pep_of(session: Session) -> Pep:
+    """Return the session's PEP, created on first use."""
+    if session.pep is None:
+        session.pep = Pep(session.session_id, session.tokens)
+    return session.pep

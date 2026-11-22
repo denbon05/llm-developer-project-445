@@ -1,6 +1,6 @@
 """How code answers a confirmation card, on the real Postgres tables.
 
-A fake MCP pool stands in for the MCP servers.
+A fake MCP pool stands in for the MCP servers, a fake PEP for the PDP.
 """
 
 import asyncio
@@ -11,10 +11,12 @@ from actions.contracts import ActionKind
 from app import audit, cards, messages, orchestrator
 from app.answers import CardAnswer
 from app.cards import Card, CardState
+from app.permissions import Decision
 from app.sessions import Session
 from app.tools import ToolName
 from core import config, db
 from tests.integration.fake_mcp import FakeMcpPool, make_session
+from tests.integration.fake_pep import FakePep
 
 ANNA_SUB = config.USERS["anna"].sub
 
@@ -280,17 +282,69 @@ def test_change_of_topic_leaves_the_card_live():
     assert fetch_card_state(card) == "pending"
 
 
-def test_yes_to_an_expired_card_executes_nothing():
-    """A card past its lifetime takes no answer."""
-    mcp_pool = FakeMcpPool({ToolName.EXECUTE_ACTION: TARIFF_CHANGED_RESULT})
+@pytest.mark.parametrize(
+    (
+        "decision_by_action",
+        "has_card_expired",
+        "expected_reply",
+        "expected_state",
+        "expected_outcomes",
+    ),
+    [
+        # The session's third tariff change. The card stays pending, so
+        # «оператор» can still hand it over with this attempt in the note.
+        (
+            {"Execute": Decision(allowed=False, reason="session_limit")},
+            False,
+            messages.SESSION_TARIFF_LIMIT,
+            "pending",
+            [("denied", "session_limit")],
+        ),
+        # A "да" to an expired card still reaches the PDP, and its clock
+        # says it is too late.
+        (
+            {
+                "ConfirmCard": Decision(
+                    allowed=False, reason="confirmation_expired"
+                )
+            },
+            True,
+            messages.CARD_EXPIRED,
+            "expired",
+            [("expired", None)],
+        ),
+        # No decision from the PDP: the subscriber may answer again later.
+        (
+            {"ConfirmCard": Decision(allowed=False, reason="pdp_unavailable")},
+            False,
+            messages.CHANGE_UNAVAILABLE_RETRY,
+            "pending",
+            [("denied", "pdp_unavailable")],
+        ),
+    ],
+)
+def test_yes_the_policy_refuses_executes_nothing(
+    decision_by_action,
+    has_card_expired,
+    expected_reply,
+    expected_state,
+    expected_outcomes,
+):
+    """The reply names no reason; the journal keeps it."""
+    # Any call of the action server fails the test.
+    mcp_pool = FakeMcpPool({})
     session = make_session(mcp_pool)
+    session.pep = FakePep(decision_by_action)
     card = create_tariff_card(session)
-    expire_card(card)
+    if has_card_expired:
+        expire_card(card)
 
     reply = answer_message(session, "да")
 
-    assert reply is None
+    assert reply == expected_reply
     assert mcp_pool.tool_calls == []
+    assert fetch_card_state(card) == expected_state
+    assert fetch_card_outcomes(card) == expected_outcomes
 
 
 def test_refused_execution_leaves_the_card_pending():
@@ -418,6 +472,8 @@ def test_new_card_that_expired_during_the_turn_is_not_shown():
 
     assert [event["type"] for event in sent_events] == ["reply"]
     assert sent_events[0]["text"] == messages.CARD_EXPIRED
+    assert fetch_card_state(card) == "expired"
+    assert fetch_card_outcomes(card) == [("expired", None)]
 
 
 def test_answer_by_card_id_is_recorded_in_the_dialogue():
