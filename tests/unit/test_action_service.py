@@ -1,4 +1,4 @@
-"""Preparing and executing actions. A fake replaces the REST mocks."""
+"""Preparing and executing actions. A stub replaces the REST mocks."""
 
 import asyncio
 
@@ -26,7 +26,7 @@ TARIFF_CATALOG = [
 ]
 
 
-class FakeMocks:
+class StubRestMocks:
     """Answers like the REST mocks and remembers the bodies sent to them."""
 
     def __init__(self) -> None:
@@ -50,15 +50,15 @@ class FakeMocks:
         return self.response_by_path.get(path, {"outcome": "ok"})
 
 
-# autouse: every test of this module gets the fake, so none of them can reach
+# autouse: every test of this module gets the stub, so none of them can reach
 # the stand's REST mocks and change its data. A test that checks what was sent
-# takes fake_mocks as an argument.
+# takes stub_rest_mocks as an argument.
 @pytest.fixture(autouse=True)
-def fake_mocks(monkeypatch) -> FakeMocks:
-    """Replace the REST mocks behind actions.service with a fake."""
-    fake_mocks = FakeMocks()
-    monkeypatch.setattr(service, "request_mock", fake_mocks.request)
-    return fake_mocks
+def stub_rest_mocks(monkeypatch) -> StubRestMocks:
+    """Replace the REST mocks behind actions.service with a stub."""
+    stub_rest_mocks = StubRestMocks()
+    monkeypatch.setattr(service, "request_mock", stub_rest_mocks.request)
+    return stub_rest_mocks
 
 
 def refusal_code(prepare_call) -> ErrorCode:
@@ -240,7 +240,9 @@ def test_null_and_blank_mean_not_given(value, expected):
     assert service.nullify_blank(value) == expected
 
 
-def test_tariff_change_goes_to_billing_with_the_idempotency_key(fake_mocks):
+def test_tariff_change_goes_to_billing_with_the_idempotency_key(
+    stub_rest_mocks,
+):
     """Billing needs the key to refuse a second change itself."""
     asyncio.run(
         service.execute_action(
@@ -248,7 +250,7 @@ def test_tariff_change_goes_to_billing_with_the_idempotency_key(fake_mocks):
         )
     )
 
-    assert fake_mocks.sent_bodies == [
+    assert stub_rest_mocks.sent_bodies == [
         (
             "/mock/billing/tariff-change",
             {"sub": ANNA_SUB, "tariff": "Семейный", "idempotency_key": "key_1"},
@@ -256,9 +258,9 @@ def test_tariff_change_goes_to_billing_with_the_idempotency_key(fake_mocks):
     ]
 
 
-def test_service_toggle_goes_to_the_crm(fake_mocks):
+def test_service_toggle_goes_to_the_crm(stub_rest_mocks):
     """The CRM gets the service and the state to set; both states come back."""
-    fake_mocks.response_by_path["/mock/crm/toggle-service"] = {
+    stub_rest_mocks.response_by_path["/mock/crm/toggle-service"] = {
         "outcome": "toggled",
         "service": "Роуминг",
         "enabled": True,
@@ -273,7 +275,7 @@ def test_service_toggle_goes_to_the_crm(fake_mocks):
         )
     )
 
-    assert fake_mocks.sent_bodies == [
+    assert stub_rest_mocks.sent_bodies == [
         (
             "/mock/crm/toggle-service",
             {"sub": ANNA_SUB, "service": "Роуминг", "enabled": True},
@@ -284,9 +286,9 @@ def test_service_toggle_goes_to_the_crm(fake_mocks):
     assert execution_result.get("after") is True
 
 
-def test_contacts_update_sends_null_for_the_contact_it_keeps(fake_mocks):
+def test_contacts_update_sends_null_for_the_contact_it_keeps(stub_rest_mocks):
     """The CRM keeps a contact that arrives as null; only the other changes."""
-    fake_mocks.response_by_path["/mock/crm/contacts"] = {
+    stub_rest_mocks.response_by_path["/mock/crm/contacts"] = {
         "outcome": "updated",
         "phone": "+7 900 111-22-33",
         "email": "new@example.ru",
@@ -298,7 +300,7 @@ def test_contacts_update_sends_null_for_the_contact_it_keeps(fake_mocks):
         )
     )
 
-    assert fake_mocks.sent_bodies == [
+    assert stub_rest_mocks.sent_bodies == [
         (
             "/mock/crm/contacts",
             {"sub": ANNA_SUB, "phone": None, "email": "new@example.ru"},
@@ -308,7 +310,7 @@ def test_contacts_update_sends_null_for_the_contact_it_keeps(fake_mocks):
     assert execution_result.get("after") == {"email": "new@example.ru"}
 
 
-def test_unknown_action_is_refused_with_the_known_ones(fake_mocks):
+def test_unknown_action_is_refused_with_the_known_ones(stub_rest_mocks):
     """Nothing is sent, and the refusal lists what can be executed."""
     with pytest.raises(ActionError) as error_info:
         asyncio.run(service.execute_action(ANNA_SUB, "delete", "{}", "key_1"))
@@ -320,12 +322,12 @@ def test_unknown_action_is_refused_with_the_known_ones(fake_mocks):
         "service_toggle",
         "contacts_update",
     ]
-    assert fake_mocks.sent_bodies == []
+    assert stub_rest_mocks.sent_bodies == []
 
 
 @pytest.mark.parametrize("details_json", ["not json", "[1, 2]", "null"])
 def test_details_that_are_not_a_json_object_are_refused(
-    fake_mocks, details_json
+    stub_rest_mocks, details_json
 ):
     """Execution needs the card details as an object."""
     code = refusal_code(
@@ -333,14 +335,14 @@ def test_details_that_are_not_a_json_object_are_refused(
     )
 
     assert code == ErrorCode.BAD_DETAILS
-    assert fake_mocks.sent_bodies == []
+    assert stub_rest_mocks.sent_bodies == []
 
 
-def test_ticket_goes_to_the_ticket_mock(fake_mocks):
+def test_ticket_goes_to_the_ticket_mock(stub_rest_mocks):
     """The ticket carries the subscriber, the subject and the note."""
     asyncio.run(service.create_ticket(ANNA_SUB, "Смена тарифа", "не работает"))
 
-    assert fake_mocks.sent_bodies == [
+    assert stub_rest_mocks.sent_bodies == [
         (
             "/mock/tickets/create",
             {"sub": ANNA_SUB, "subject": "Смена тарифа", "note": "не работает"},

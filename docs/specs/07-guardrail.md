@@ -113,7 +113,7 @@ turn always sets the flag before its first PEP call. The module docstring's
   `build_policy_input(card, guard_ok)`, which puts it in the input. A comment
   at the default names smoke group 3; the app's callers always pass
   `session.guard_ok`.
-- `tests/integration/fake_pep.py`: `FakePep.request_decision(action, card,
+- `tests/integration/stub_pep.py`: `StubPep.request_decision(action, card,
   guard_ok)` also appends `(action, guard_ok)` to `received_guard_ok`.
 
 ## Policy
@@ -281,7 +281,7 @@ No message text reaches the audit, the trace or info logs. The rows:
   (`httpx` isn't installed, so Starlette's `TestClient` can't run): `/check`
   200; after `/admin/down` `/check` and `/health` 503; after `/admin/up` 200
   again.
-- `tests/unit/test_guardrail_client.py`: a fake service on
+- `tests/unit/test_guardrail_client.py`: a stub service on
   `httpx2.MockTransport`, reached by patching `build_guardrail_client`. A
   table: `safe`; `unsafe` with its category; no connection, timeout, 503, a
   body that isn't JSON → `available=False`, `safe=True`.
@@ -295,12 +295,12 @@ No message text reaches the audit, the trace or info logs. The rows:
   `has_created_card_or_ticket` assertions move to one `has_fixed_reply`
   table (ticket, failed ticket, card, refused prepare, which replaces its own
   test) with a row for a run stopped at a denial.
-- Integration: `conftest.py` patches `guardrail_client.check` with a fake
+- Integration: `conftest.py` patches `guardrail_client.check` with a stub
   that answers safe unless a test sets other verdicts per mode.
   `tests/integration/test_card_answers.py` gets one table:
   - unsafe input on a typed message → `INPUT_REFUSED`, audit
     `guardrail_unsafe`, planner history unchanged, the card still pending;
-  - no answer on a typed «да» and on a button «да» → the fake PEP received
+  - no answer on a typed «да» and on a button «да» → the stub PEP received
     `guard_ok=False`; with its `ConfirmCard` set to Deny `guard_not_ok` →
     `CHANGE_UNAVAILABLE_RETRY`, audit `guardrail_degraded` and `denied`, the
     card still pending.

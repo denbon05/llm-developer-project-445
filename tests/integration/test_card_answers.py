@@ -1,6 +1,6 @@
 """How code answers a confirmation card, on the real Postgres tables.
 
-A fake MCP pool stands in for the MCP servers, a fake PEP for the PDP, a fake
+A stub MCP pool stands in for the MCP servers, a stub PEP for the PDP, a stub
 guardrail for the text check service.
 """
 
@@ -18,8 +18,8 @@ from app.permissions import Decision
 from app.sessions import Session
 from app.tools import ToolName
 from core import config, db
-from tests.integration.fake_mcp import FakeMcpPool, make_session
-from tests.integration.fake_pep import FakePep
+from tests.integration.stub_mcp import StubMcpPool, make_session
+from tests.integration.stub_pep import StubPep
 
 ANNA_SUB = config.USERS["anna"].sub
 
@@ -130,7 +130,7 @@ def fetch_turn_entries(session: Session) -> list[tuple[str, str, str | None]]:
 
 def test_yes_executes_the_live_card():
     """The confirmed card goes to the action server with its own key."""
-    mcp_pool = FakeMcpPool({ToolName.EXECUTE_ACTION: TARIFF_CHANGED_RESULT})
+    mcp_pool = StubMcpPool({ToolName.EXECUTE_ACTION: TARIFF_CHANGED_RESULT})
     session = make_session(mcp_pool)
     card = create_tariff_card(session)
 
@@ -168,7 +168,7 @@ def test_yes_executes_the_live_card():
 
 def test_repeated_yes_gets_the_duplicate_reply():
     """A second "да" finds the card's key taken and executes nothing."""
-    mcp_pool = FakeMcpPool({ToolName.EXECUTE_ACTION: TARIFF_CHANGED_RESULT})
+    mcp_pool = StubMcpPool({ToolName.EXECUTE_ACTION: TARIFF_CHANGED_RESULT})
     session = make_session(mcp_pool)
     card = create_tariff_card(session)
     answer_message(session, "да")
@@ -187,7 +187,7 @@ def test_repeated_yes_gets_the_duplicate_reply():
 def test_billing_duplicate_on_the_first_yes_is_an_execution():
     """Our key was free, so the tariff changed during this "да"."""
     # McpPool retried after a lost response, and billing knew the key.
-    mcp_pool = FakeMcpPool(
+    mcp_pool = StubMcpPool(
         {
             ToolName.EXECUTE_ACTION: {
                 **TARIFF_CHANGED_RESULT,
@@ -217,7 +217,7 @@ def test_billing_duplicate_on_the_first_yes_is_an_execution():
 
 def test_card_button_after_a_typed_yes_gets_the_duplicate_reply():
     """The card's key stops a second confirmation of the same card."""
-    mcp_pool = FakeMcpPool({ToolName.EXECUTE_ACTION: TARIFF_CHANGED_RESULT})
+    mcp_pool = StubMcpPool({ToolName.EXECUTE_ACTION: TARIFF_CHANGED_RESULT})
     session = make_session(mcp_pool)
     card = create_tariff_card(session)
     answer_message(session, "да")
@@ -231,7 +231,7 @@ def test_card_button_after_a_typed_yes_gets_the_duplicate_reply():
 
 def test_no_to_a_confirmed_card_goes_to_the_agents():
     """Only a repeated "да" refers to a confirmed card."""
-    mcp_pool = FakeMcpPool({ToolName.EXECUTE_ACTION: TARIFF_CHANGED_RESULT})
+    mcp_pool = StubMcpPool({ToolName.EXECUTE_ACTION: TARIFF_CHANGED_RESULT})
     session = make_session(mcp_pool)
     card = create_tariff_card(session)
     answer_message(session, "да")
@@ -256,7 +256,7 @@ def test_yes_after_a_failed_execution_retries_the_card(
     failed_execution, error_type
 ):
     """A failure leaves the card pending, so the next "да" runs it again."""
-    mcp_pool = FakeMcpPool({ToolName.EXECUTE_ACTION: failed_execution})
+    mcp_pool = StubMcpPool({ToolName.EXECUTE_ACTION: failed_execution})
     session = make_session(mcp_pool)
     card = create_tariff_card(session)
 
@@ -283,7 +283,7 @@ def test_yes_after_a_failed_execution_retries_the_card(
 
 def test_no_rejects_the_live_card():
     """A cancelled card is closed and nothing is executed."""
-    mcp_pool = FakeMcpPool({})
+    mcp_pool = StubMcpPool({})
     session = make_session(mcp_pool)
     card = create_tariff_card(session)
 
@@ -297,7 +297,7 @@ def test_no_rejects_the_live_card():
 
 def test_change_of_topic_leaves_the_card_live():
     """A question is not an answer: the agents take it, the card waits."""
-    mcp_pool = FakeMcpPool({})
+    mcp_pool = StubMcpPool({})
     session = make_session(mcp_pool)
     card = create_tariff_card(session)
 
@@ -358,9 +358,9 @@ def test_yes_the_policy_refuses_executes_nothing(
 ):
     """The reply names no reason; the journal keeps it."""
     # Any call of the action server fails the test.
-    mcp_pool = FakeMcpPool({})
+    mcp_pool = StubMcpPool({})
     session = make_session(mcp_pool)
-    session.pep = FakePep(decision_by_action)
+    session.pep = StubPep(decision_by_action)
     card = create_tariff_card(session)
     if has_card_expired:
         expire_card(card)
@@ -421,7 +421,7 @@ def test_yes_the_policy_refuses_executes_nothing(
     ],
 )
 def test_text_check_of_the_answer_guards_the_card(
-    fake_guardrail,
+    stub_guardrail,
     message,
     input_verdict,
     expected_reply,
@@ -431,15 +431,15 @@ def test_text_check_of_the_answer_guards_the_card(
 ):
     """An unsafe message answers no card; without a verdict no stage passes."""
     # Any call of the action server fails the test.
-    mcp_pool = FakeMcpPool({})
+    mcp_pool = StubMcpPool({})
     session = make_session(mcp_pool)
     # The policy refuses a stage asked without a verdict, as the real one does.
-    fake_pep = FakePep(
+    stub_pep = StubPep(
         {"ConfirmCard": Decision(allowed=False, reason="guard_not_ok")}
     )
-    session.pep = fake_pep
+    session.pep = stub_pep
     card = create_tariff_card(session)
-    fake_guardrail.verdict_by_mode[CheckMode.INPUT] = input_verdict
+    stub_guardrail.verdict_by_mode[CheckMode.INPUT] = input_verdict
 
     reply = (
         answer_in_a_turn(session, message)
@@ -449,7 +449,7 @@ def test_text_check_of_the_answer_guards_the_card(
 
     assert reply == expected_reply
     assert fetch_turn_entries(session) == expected_entries
-    assert fake_pep.received_guard_ok == expected_received_guard_ok
+    assert stub_pep.received_guard_ok == expected_received_guard_ok
     assert (session.planner_messages != []) is is_message_remembered
     # The card stays pending, so «оператор» can still hand it over.
     assert fetch_card_state(card) == "pending"
@@ -458,7 +458,7 @@ def test_text_check_of_the_answer_guards_the_card(
 
 def test_refused_execution_leaves_the_card_pending():
     """After a refusal the card can still be handed to an operator."""
-    mcp_pool = FakeMcpPool(
+    mcp_pool = StubMcpPool(
         {
             ToolName.EXECUTE_ACTION: {"outcome": "daily_limit", "limit": 2},
             ToolName.CREATE_TICKET: {"ticket_id": "t_1674"},
@@ -490,7 +490,7 @@ def test_refused_execution_leaves_the_card_pending():
 
 def test_asking_for_an_operator_turns_the_card_into_a_ticket():
     """The ticket carries what the card showed, then the card is closed."""
-    mcp_pool = FakeMcpPool({ToolName.CREATE_TICKET: {"ticket_id": "t_1674"}})
+    mcp_pool = StubMcpPool({ToolName.CREATE_TICKET: {"ticket_id": "t_1674"}})
     session = make_session(mcp_pool)
     card = create_tariff_card(session)
 
@@ -516,7 +516,7 @@ def test_asking_for_an_operator_turns_the_card_into_a_ticket():
 
 def test_failed_ticket_leaves_the_card_live():
     """Without a ticket the card must stay answerable."""
-    mcp_pool = FakeMcpPool(
+    mcp_pool = StubMcpPool(
         {ToolName.CREATE_TICKET: RuntimeError("server is down")}
     )
     session = make_session(mcp_pool)
@@ -532,7 +532,7 @@ def test_failed_ticket_leaves_the_card_live():
 
 def test_ticket_without_an_id_leaves_the_card_live():
     """An answer without a ticket id is no ticket: the subscriber may retry."""
-    mcp_pool = FakeMcpPool({ToolName.CREATE_TICKET: {"status": "error"}})
+    mcp_pool = StubMcpPool({ToolName.CREATE_TICKET: {"status": "error"}})
     session = make_session(mcp_pool)
     card = create_tariff_card(session)
 
@@ -567,7 +567,7 @@ def send_new_card_replies(session: Session, card: Card) -> list[dict]:
 
 def test_new_live_card_is_shown():
     """The card goes to the browser, then the text that asks to answer it."""
-    session = make_session(FakeMcpPool({}))
+    session = make_session(StubMcpPool({}))
     card = create_tariff_card(session)
 
     sent_events = send_new_card_replies(session, card)
@@ -608,7 +608,7 @@ def test_new_live_card_is_shown():
     ],
 )
 def test_new_card_the_turn_cannot_show_is_hidden(
-    fake_guardrail,
+    stub_guardrail,
     output_verdict,
     has_card_expired,
     expected_reply,
@@ -616,11 +616,11 @@ def test_new_card_the_turn_cannot_show_is_hidden(
     expected_outcomes,
 ):
     """The card isn't shown, and a press of its button finds no card."""
-    session = make_session(FakeMcpPool({}))
+    session = make_session(StubMcpPool({}))
     card = create_tariff_card(session)
     if has_card_expired:
         expire_card(card)
-    fake_guardrail.verdict_by_mode[CheckMode.OUTPUT] = output_verdict
+    stub_guardrail.verdict_by_mode[CheckMode.OUTPUT] = output_verdict
 
     sent_events = send_new_card_replies(session, card)
 
@@ -635,7 +635,7 @@ def test_new_card_the_turn_cannot_show_is_hidden(
 
 def test_answer_by_card_id_is_recorded_in_the_dialogue():
     """An answer given without text is remembered as "да" and its reply."""
-    mcp_pool = FakeMcpPool({ToolName.EXECUTE_ACTION: TARIFF_CHANGED_RESULT})
+    mcp_pool = StubMcpPool({ToolName.EXECUTE_ACTION: TARIFF_CHANGED_RESULT})
     session = make_session(mcp_pool)
     card = create_tariff_card(session)
 
@@ -650,7 +650,7 @@ def test_answer_by_card_id_is_recorded_in_the_dialogue():
 
 def test_card_of_another_session_is_not_answered():
     """A card's id alone is not enough: it must be the session's own card."""
-    mcp_pool = FakeMcpPool({ToolName.EXECUTE_ACTION: TARIFF_CHANGED_RESULT})
+    mcp_pool = StubMcpPool({ToolName.EXECUTE_ACTION: TARIFF_CHANGED_RESULT})
     card = create_tariff_card(make_session(mcp_pool))
     other_session = make_session(mcp_pool)
 

@@ -5,7 +5,7 @@ import pytest
 from app import audit, cards, orchestrator, telemetry
 from core.logging import make_trace_id
 from pdp.service import _audit as record_policy_decision
-from tests.integration.fake_mcp import FakeMcpPool, make_session
+from tests.integration.stub_mcp import StubMcpPool, make_session
 
 SUBSCRIBER_ID = "u_1111"
 OTHER_SUBSCRIBER_ID = "u_2222"
@@ -16,7 +16,7 @@ def test_trace_lists_a_turns_records_in_time_order():
     # A card created in an earlier turn, the one of card_session: its row
     # keeps that turn's trace id. Only the trace id matters here; create()
     # also needs details and a view, whatever they are.
-    card_session = make_session(FakeMcpPool({}))
+    card_session = make_session(StubMcpPool({}))
     card = cards.create(
         card_session,
         "tariff_change",

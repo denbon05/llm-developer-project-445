@@ -1,10 +1,10 @@
-"""A fake MCP pool and a session that uses it and a fake PEP."""
+"""A stub MCP pool and a session that uses it and a stub PEP."""
 
 from app import permissions
 from app.sessions import Session
 from core import config
 from core.logging import make_trace_id
-from tests.integration.fake_pep import FakePep
+from tests.integration.stub_pep import StubPep
 
 # What anna's token allows: the claims the issuer puts in it.
 ANNA_ALLOWLIST = permissions.allowlist_from_claims(
@@ -12,7 +12,7 @@ ANNA_ALLOWLIST = permissions.allowlist_from_claims(
 )
 
 
-class FakeMcpPool:
+class StubMcpPool:
     """Answers like an MCP pool and remembers every call."""
 
     def __init__(self, result_by_tool: dict[str, dict | Exception]) -> None:
@@ -44,19 +44,19 @@ class FakeMcpPool:
         return tool_result
 
 
-def make_session(mcp_pool: FakeMcpPool) -> Session:
-    """Return a new session of anna backed by the fake MCP pool.
+def make_session(mcp_pool: StubMcpPool) -> Session:
+    """Return a new session of anna backed by the stub MCP pool.
 
-    Its PEP allows every stage; a test may put another fake in `pep`.
+    Its PEP allows every stage; a test may put another stub in `pep`.
     """
     return Session(
         login="anna",
         user=config.USERS["anna"],
-        # No tokens: the fake MCP pool doesn't check them.
+        # No tokens: the stub MCP pool doesn't check them.
         tokens=None,  # pyright: ignore[reportArgumentType]
         mcp=mcp_pool,  # pyright: ignore[reportArgumentType]
         allowlist=ANNA_ALLOWLIST,
         # A trace of its own, so a test finds the rows its session wrote.
         trace_id=make_trace_id(),
-        pep=FakePep(),
+        pep=StubPep(),
     )

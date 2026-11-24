@@ -1,4 +1,4 @@
-"""A throwaway Postgres and a fake guardrail for the tests of this folder.
+"""A throwaway Postgres and a stub guardrail for the tests of this folder.
 
 Needs Docker.
 """
@@ -43,7 +43,7 @@ def empty_tables() -> None:
     )
 
 
-class FakeGuardrail:
+class StubGuardrail:
     """Answers every check safe unless a test sets a verdict for its mode."""
 
     def __init__(self) -> None:
@@ -57,8 +57,8 @@ class FakeGuardrail:
 
 
 @pytest.fixture(autouse=True)
-def fake_guardrail(monkeypatch) -> FakeGuardrail:
-    """Replace the guardrail client's check with a fake's."""
-    guardrail = FakeGuardrail()
+def stub_guardrail(monkeypatch) -> StubGuardrail:
+    """Replace the guardrail client's check with a stub's."""
+    guardrail = StubGuardrail()
     monkeypatch.setattr(guardrail_client, "check", guardrail.check)
     return guardrail

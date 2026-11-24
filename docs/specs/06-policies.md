@@ -141,12 +141,12 @@ the PEP does with the answer.
     trust_env=False, timeout=PDP_TIMEOUT_SEC)`; one client per decision
     serves the open, the request and its repeat.
   - `Pep.request_decision(action, card)` is the only method that talks to the
-    PDP; the fakes of the tests override it, so `policy_decision` is still
+    PDP; the stubs of the tests override it, so `policy_decision` is still
     logged.
 
 `app/sessions.py`: `Session.pep: Pep | None = None`; `pep_of(session) -> Pep`
 creates `Pep(session.session_id, session.tokens)` on first use and returns the
-same one after. Tests put a fake in `session.pep`. The docstring keeps only the
+same one after. Tests put a stub in `session.pep`. The docstring keeps only the
 `guard_state` part for the guardrail.
 
 ## Prepare path
@@ -250,7 +250,7 @@ other turns don't join them.
   card → Allow; a third distinct card → Deny; a service after the limit →
   Allow; `ConfirmCard` with other `details` than `Prepare` → Deny. Smoke group
   4 covers the rest.
-- `tests/unit/test_pep.py`: a fake PDP on `httpx2.MockTransport`, reached by
+- `tests/unit/test_pep.py`: a stub PDP on `httpx2.MockTransport`, reached by
   patching `pep.build_pdp_client`. One test: the bodies sent for a card at
   the three stages (session opened once, input fields, sorted `details`,
   `trace_id`). A table: a Deny with its reason; no connection, timeout or 500
@@ -258,11 +258,11 @@ other turns don't join them.
   repeated once; a failed open is tried again on the next request.
 - `tests/unit/test_wrap.py`: the "prepare creates a card" test becomes a
   two-row table: Allow stores the card; Deny (`pdp_unavailable`) stores
-  nothing and ends the run with `CHANGE_UNAVAILABLE`. Its `FakePep` gives one
+  nothing and ends the run with `CHANGE_UNAVAILABLE`. Its `StubPep` gives one
   decision to every stage.
-- `tests/integration/fake_pep.py`: `FakePep(decision_by_action)`, a `Pep`
+- `tests/integration/stub_pep.py`: `StubPep(decision_by_action)`, a `Pep`
   subclass; a stage without a set decision is allowed. `make_session` in
-  `fake_mcp.py` gives every session an allowing one; a test replaces
+  `stub_mcp.py` gives every session an allowing one; a test replaces
   `session.pep`. `conftest.py` truncates `policy_events` with the other
   tables.
 - `tests/integration/test_card_answers.py`: a table, set decisions → reply,
@@ -271,7 +271,7 @@ other turns don't join them.
   `confirmation_expired` on a card expired in the database too →
   `CARD_EXPIRED`, card `expired`, audit `expired` (it replaces the old test
   that a "да" to an expired card goes to the agents); `pdp_unavailable` → its
-  text, card pending. The existing tests get the allowing fake. The slow-turn
+  text, card pending. The existing tests get the allowing stub. The slow-turn
   expiry gets one check in its existing test: card `expired`, audit
   `expired`.
 - `tests/integration/test_audit.py`: the existing timeline test gets a

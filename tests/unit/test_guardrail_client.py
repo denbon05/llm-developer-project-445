@@ -1,6 +1,6 @@
 """How the guardrail client reads the text check service's answers.
 
-A fake service on httpx2.MockTransport answers, so no services are needed.
+A stub service on httpx2.MockTransport answers, so no services are needed.
 """
 
 import asyncio
@@ -15,10 +15,10 @@ from core import config
 UNAVAILABLE = Verdict(safe=True, category=None, available=False)
 
 
-def install_fake_service(
+def install_stub_service(
     monkeypatch, service_answer: httpx2.Response | type[httpx2.TransportError]
 ) -> None:
-    """Make the client reach a fake service that gives this answer."""
+    """Make the client reach a stub service that gives this answer."""
 
     def answer(request: httpx2.Request) -> httpx2.Response:
         if isinstance(service_answer, httpx2.Response):
@@ -78,7 +78,7 @@ def test_client_reads_the_verdict(
     monkeypatch, service_answer, expected_verdict
 ):
     """Anything but a verdict is a check that didn't answer, never an error."""
-    install_fake_service(monkeypatch, service_answer)
+    install_stub_service(monkeypatch, service_answer)
 
     verdict = asyncio.run(
         guardrail_client.check("какой у меня тариф?", mode=CheckMode.INPUT)

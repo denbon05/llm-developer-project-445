@@ -224,7 +224,7 @@ it's empty. `Card` doesn't change.
 - `tests/integration/test_tool_calls.py`: one parametrized table, tool result →
   `tool_calls` row (`outcome`, cut `args`, broken JSON), plus the audit entry
   for a refused `prepare_*` and an agent's ticket.
-- `tests/integration/fake_mcp.py`: `FakeMcpPool` and `make_session`, moved
+- `tests/integration/stub_mcp.py`: `StubMcpPool` and `make_session`, moved
   from `test_card_answers.py` and shared. The session has its own `trace_id`,
   so a test finds the rows it wrote.
 - `tests/unit/conftest.py`: an autouse fixture makes `audit.append`,

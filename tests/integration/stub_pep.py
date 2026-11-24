@@ -1,11 +1,11 @@
-"""A fake PEP that gives set decisions instead of asking the PDP."""
+"""A stub PEP that gives set decisions instead of asking the PDP."""
 
 from app.cards import Card
 from app.pep import Pep
 from app.permissions import Decision
 
 
-class FakePep(Pep):
+class StubPep(Pep):
     """Gives each stage its set decision; a stage without one is allowed."""
 
     def __init__(

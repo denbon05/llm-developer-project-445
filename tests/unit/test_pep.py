@@ -1,6 +1,6 @@
 """What the PEP sends to the PDP and how it reads the answers.
 
-A fake PDP on httpx2.MockTransport answers, so no services are needed.
+A stub PDP on httpx2.MockTransport answers, so no services are needed.
 """
 
 import asyncio
@@ -43,14 +43,14 @@ ALLOWED = Decision(allowed=True)
 UNAVAILABLE = Decision(allowed=False, reason="pdp_unavailable")
 
 
-class FakeTokens:
+class StubTokens:
     """Gives anna's claims, as the issuer puts them in her token."""
 
     async def claims(self) -> dict:
         return ANNA_CLAIMS
 
 
-class FakePdp:
+class StubPdp:
     """Answers the PEP's requests in order and remembers each one."""
 
     def __init__(
@@ -70,27 +70,27 @@ class FakePdp:
         raise pdp_answer("the PDP failed", request=request)
 
 
-def install_fake_pdp(monkeypatch, fake_pdp: FakePdp) -> None:
-    """Make the PEP's HTTP clients reach the fake PDP."""
+def install_stub_pdp(monkeypatch, stub_pdp: StubPdp) -> None:
+    """Make the PEP's HTTP clients reach the stub PDP."""
     monkeypatch.setattr(
         pep,
         "build_pdp_client",
         lambda: httpx2.AsyncClient(
             base_url=config.PDP_URL,
-            transport=httpx2.MockTransport(fake_pdp.answer),
+            transport=httpx2.MockTransport(stub_pdp.answer),
         ),
     )
 
 
 def make_pep() -> Pep:
     """Return anna's PEP."""
-    return Pep(SESSION_ID, FakeTokens())  # pyright: ignore[reportArgumentType]
+    return Pep(SESSION_ID, StubTokens())  # pyright: ignore[reportArgumentType]
 
 
 def test_pep_sends_the_card_and_the_subject(monkeypatch):
     """The PDP gets the subject once, then the card and the turn's flag."""
-    fake_pdp = FakePdp([SESSION_OPENED, ALLOW, ALLOW, ALLOW])
-    install_fake_pdp(monkeypatch, fake_pdp)
+    stub_pdp = StubPdp([SESSION_OPENED, ALLOW, ALLOW, ALLOW])
+    install_stub_pdp(monkeypatch, stub_pdp)
     card_pep = make_pep()
 
     async def pass_the_card() -> None:
@@ -123,7 +123,7 @@ def test_pep_sends_the_card_and_the_subject(monkeypatch):
         "input": policy_input,
         "trace_id": "tr_1a2b3c4d5e6f",
     }
-    assert fake_pdp.requests == [
+    assert stub_pdp.requests == [
         ("/session", {"session_id": SESSION_ID, "subject": subject}),
         ("/authorize", {**stage_request, "action": "Prepare"}),
         # A "да" has its own endpoint, which needs no action.
@@ -177,8 +177,8 @@ def test_pep_closes_writes_without_a_decision(
     monkeypatch, pdp_answers, expected_decisions, expected_paths
 ):
     """Anything but a decision from the PDP is a refusal."""
-    fake_pdp = FakePdp(pdp_answers)
-    install_fake_pdp(monkeypatch, fake_pdp)
+    stub_pdp = StubPdp(pdp_answers)
+    install_stub_pdp(monkeypatch, stub_pdp)
     card_pep = make_pep()
 
     decisions = [
@@ -186,4 +186,4 @@ def test_pep_closes_writes_without_a_decision(
     ]
 
     assert decisions == expected_decisions
-    assert [path for path, _ in fake_pdp.requests] == expected_paths
+    assert [path for path, _ in stub_pdp.requests] == expected_paths

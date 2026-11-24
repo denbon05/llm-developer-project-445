@@ -1,6 +1,6 @@
 """The tool wrapper checks the allowlist and turns prepare results into cards.
 
-Fakes stand in for the MCP servers and the PDP, so no services are needed.
+Stubs stand in for the MCP servers and the PDP, so no services are needed.
 """
 
 import asyncio
@@ -37,7 +37,7 @@ ANNA_ALLOWLIST: Allowlist = frozenset(
 )
 
 
-class FakeMcpPool:
+class StubMcpPool:
     """Answers like an MCP pool and remembers the arguments of each call."""
 
     def __init__(self, schema_by_tool: dict, result_by_tool: dict) -> None:
@@ -64,7 +64,7 @@ class FakeMcpPool:
         return self.result_by_tool.get(name, {})
 
 
-class FakePep(Pep):
+class StubPep(Pep):
     """Gives every stage of a card the same decision, without a PDP."""
 
     def __init__(self, decision: Decision) -> None:
@@ -79,9 +79,9 @@ class FakePep(Pep):
 
 
 def make_session(
-    mcp_pool: FakeMcpPool, allowlist: Allowlist = ANNA_ALLOWLIST
+    mcp_pool: StubMcpPool, allowlist: Allowlist = ANNA_ALLOWLIST
 ) -> Session:
-    """Return anna's session backed by the fake MCP pool."""
+    """Return anna's session backed by the stub MCP pool."""
     return Session(
         login="anna",
         user=config.USERS["anna"],
@@ -99,7 +99,7 @@ def invoke(tool, arguments: dict) -> dict:
 
 def test_agent_gets_only_offered_and_visible_tools():
     """A tool the allowlist hides or no server offers is left out."""
-    mcp_pool = FakeMcpPool(
+    mcp_pool = StubMcpPool(
         {
             ToolName.PREPARE_TARIFF_CHANGE: PREPARE_SCHEMA,
             ToolName.GET_MY_TARIFF: READ_SCHEMA,
@@ -127,7 +127,7 @@ def test_agent_gets_only_offered_and_visible_tools():
 
 def test_denied_call_never_reaches_the_server():
     """A call naming a subscriber gets the denial instead of an answer."""
-    mcp_pool = FakeMcpPool(
+    mcp_pool = StubMcpPool(
         {ToolName.PREPARE_TARIFF_CHANGE: PREPARE_SCHEMA},
         {ToolName.PREPARE_TARIFF_CHANGE: PREPARED},
     )
@@ -176,12 +176,12 @@ def test_prepare_stores_a_card_the_policy_allows(
         "store_card",
         lambda _session, card: stored_cards.append(card),
     )
-    mcp_pool = FakeMcpPool(
+    mcp_pool = StubMcpPool(
         {ToolName.PREPARE_TARIFF_CHANGE: PREPARE_SCHEMA},
         {ToolName.PREPARE_TARIFF_CHANGE: PREPARED},
     )
     session = make_session(mcp_pool)
-    session.pep = FakePep(prepare_decision)
+    session.pep = StubPep(prepare_decision)
     tool = wrap.build_agent_tool(session, ToolName.PREPARE_TARIFF_CHANGE)
 
     tool_output = invoke(tool, {"tariff": "семейный"})

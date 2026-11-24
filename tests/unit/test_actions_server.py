@@ -52,12 +52,12 @@ def test_tools_act_for_the_tokens_subject(monkeypatch):
     """No argument names the subscriber: the service gets the token's one."""
     ticket_subjects = []
 
-    async def fake_create_ticket(sub: str, _subject: str, _note: str) -> dict:
+    async def stub_create_ticket(sub: str, _subject: str, _note: str) -> dict:
         ticket_subjects.append(sub)
         return {"ticket_id": "t_1674"}
 
     monkeypatch.setattr(
-        server.action_service, "create_ticket", fake_create_ticket
+        server.action_service, "create_ticket", stub_create_ticket
     )
 
     asyncio.run(call_tool("create_ticket", {"subject": "s", "note": "n"}))
@@ -86,11 +86,11 @@ def test_contacts_without_a_new_value_are_refused(arguments):
 def test_null_phone_keeps_the_phone_and_changes_the_email(monkeypatch):
     """A null contact is kept, the other one goes to the card."""
 
-    async def fake_fetch_subscriber(_sub: str) -> dict:
+    async def stub_fetch_subscriber(_sub: str) -> dict:
         return {"phone": "+7 900 111-22-33", "email": "old@example.ru"}
 
     monkeypatch.setattr(
-        server.action_service, "fetch_subscriber", fake_fetch_subscriber
+        server.action_service, "fetch_subscriber", stub_fetch_subscriber
     )
 
     prepared_action = asyncio.run(

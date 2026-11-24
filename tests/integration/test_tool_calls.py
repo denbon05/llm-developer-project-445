@@ -1,6 +1,6 @@
 """What the tool wrapper records about a model's tool calls, on the real tables.
 
-A fake MCP pool stands in for the MCP servers.
+A stub MCP pool stands in for the MCP servers.
 """
 
 import asyncio
@@ -15,7 +15,7 @@ from app.audit import AuditOutcome
 from app.sessions import Session
 from app.tools import ToolName
 from core import config
-from tests.integration.fake_mcp import FakeMcpPool, make_session
+from tests.integration.stub_mcp import StubMcpPool, make_session
 
 ANNA_SUB = config.USERS["anna"].sub
 BORIS_SUB = config.USERS["boris"].sub
@@ -120,7 +120,7 @@ def test_every_model_call_leaves_a_tool_call_row(
     tool_name, input_json, tool_result, expected_row
 ):
     """One row per call, whatever happened, with its outcome and arguments."""
-    session = make_session(FakeMcpPool({tool_name: tool_result}))
+    session = make_session(StubMcpPool({tool_name: tool_result}))
 
     call_wrapped_tool(session, tool_name, input_json)
 
@@ -178,7 +178,7 @@ def test_refused_call_and_ticket_leave_an_audit_entry(
     tool_name, input_json, tool_result, expected_entry
 ):
     """The journal has the subscriber's attempts, not only executed changes."""
-    session = make_session(FakeMcpPool({tool_name: tool_result}))
+    session = make_session(StubMcpPool({tool_name: tool_result}))
 
     call_wrapped_tool(session, tool_name, input_json)
 
