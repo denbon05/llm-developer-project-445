@@ -30,6 +30,7 @@ class CardState(StrEnum):
     REJECTED = "rejected"  # "нет", or handed to an operator
     REPLACED = "replaced"  # a newer card of the session took its place
     EXPIRED = "expired"  # its lifetime ended before a "да" could confirm it
+    BLOCKED = "blocked"  # the output check found unsafe text in its turn
 
 
 @dataclass

@@ -15,6 +15,11 @@ class FakePep(Pep):
         super().__init__(session_id="", tokens=None)  # pyright: ignore[reportArgumentType]
         # The stage, such as "ConfirmCard", and the decision it gets.
         self.decision_by_action = decision_by_action or {}
+        # Every stage asked, in order, with the turn's flag it came with.
+        self.received_guard_ok: list[tuple[str, bool]] = []
 
-    async def request_decision(self, action: str, card: Card) -> Decision:
+    async def request_decision(
+        self, action: str, card: Card, guard_ok: bool
+    ) -> Decision:
+        self.received_guard_ok.append((action, guard_ok))
         return self.decision_by_action.get(action, Decision(allowed=True))

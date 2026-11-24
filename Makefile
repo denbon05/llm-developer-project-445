@@ -31,7 +31,7 @@ help:
 	@echo "make trace      - журналы одного хода, T=<trace_id>, без T — последний"
 	@echo "make reset      - вернуть демо-данные моков в исходное"
 	@echo "make lint       - ruff + pylint (короткие имена), F=<файлы>"
-	@echo "make typecheck  - basedpyright по всему коду, кроме tests/smoke.py"
+	@echo "make typecheck  - basedpyright по всему коду"
 	@echo "make format     - ruff: автоисправления и форматирование, F=<файлы>"
 	@echo "make inspect-mcp - все MCP-серверы в MCP Inspector, LOGIN=<пользователь>"
 
@@ -61,10 +61,9 @@ lint:
 	uv run ruff format --check $(F)
 	uv run pylint $(F)
 
-# tests/smoke.py is left out while it calls a function not written yet
-# (`guardrail_client.check`).
 typecheck:
-	uv run basedpyright app actions core services pdp guardrail kb scripts stand.py tests/unit tests/integration
+	uv run basedpyright app actions core services pdp guardrail \
+		kb scripts stand.py tests/unit tests/integration tests/smoke.py
 
 format:
 	uv run ruff check --fix-only $(F)
@@ -99,7 +98,7 @@ pdp:
 	LOG_LEVEL=$(LOG_LEVEL) $(RUN) uvicorn --factory pdp.service:build_app --host 127.0.0.1 --port 9100 --log-level warning
 
 guardrail:
-	$(RUN) uvicorn --factory guardrail.service:build_app --host 127.0.0.1 --port 8300 --log-level warning
+	LOG_LEVEL=$(LOG_LEVEL) $(RUN) uvicorn --factory guardrail.service:build_app --host 127.0.0.1 --port 8300 --log-level warning
 
 snapshot:
 	$(RUN) python -m kb.build_snapshot

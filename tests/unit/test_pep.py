@@ -88,14 +88,15 @@ def make_pep() -> Pep:
 
 
 def test_pep_sends_the_card_and_the_subject(monkeypatch):
-    """The PDP gets the subject once, then the card at every stage."""
+    """The PDP gets the subject once, then the card and the turn's flag."""
     fake_pdp = FakePdp([SESSION_OPENED, ALLOW, ALLOW, ALLOW])
     install_fake_pdp(monkeypatch, fake_pdp)
     card_pep = make_pep()
 
     async def pass_the_card() -> None:
         await card_pep.prepare(CARD)
-        await card_pep.confirm(CARD)
+        # A "да" in a turn whose text check got no answer.
+        await card_pep.confirm(CARD, guard_ok=False)
         await card_pep.execute(CARD)
 
     # A turn binds its trace id to the log context.
@@ -126,7 +127,10 @@ def test_pep_sends_the_card_and_the_subject(monkeypatch):
         ("/session", {"session_id": SESSION_ID, "subject": subject}),
         ("/authorize", {**stage_request, "action": "Prepare"}),
         # A "да" has its own endpoint, which needs no action.
-        ("/confirm", stage_request),
+        (
+            "/confirm",
+            {**stage_request, "input": {**policy_input, "guard_ok": False}},
+        ),
         ("/authorize", {**stage_request, "action": "Execute"}),
     ]
 

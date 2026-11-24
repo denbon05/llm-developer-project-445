@@ -17,13 +17,15 @@ def build_input(
     pending_id: str,
     action: str = "tariff_change",
     details: str = TARIFF_DETAILS,
+    *,
+    guard_ok: bool = True,
 ) -> dict:
     """Return the policy input for anna's card."""
     return {
         "action": action,
         "pending_id": pending_id,
         "details": details,
-        "guard_ok": True,
+        "guard_ok": guard_ok,
         "sub": "u_4f2a",
         "role": "client",
         "scopes": ["tariffs:read", "tariffs:write", "charges:read"],
@@ -75,6 +77,25 @@ TWO_TARIFF_CHANGES = [*build_card_requests("p_1"), *build_card_requests("p_2")]
                     "ConfirmCard",
                     build_input("p_1", details='{"tariff": "Игровой"}'),
                 ),
+            ],
+            "Deny",
+        ),
+        # Every stage needs a turn whose text check answered: Prepare...
+        ([("Prepare", build_input("p_1", guard_ok=False))], "Deny"),
+        # ...ConfirmCard...
+        (
+            [
+                ("Prepare", build_input("p_1")),
+                ("ConfirmCard", build_input("p_1", guard_ok=False)),
+            ],
+            "Deny",
+        ),
+        # ...and Execute.
+        (
+            [
+                ("Prepare", build_input("p_1")),
+                ("ConfirmCard", build_input("p_1")),
+                ("Execute", build_input("p_1", guard_ok=False)),
             ],
             "Deny",
         ),

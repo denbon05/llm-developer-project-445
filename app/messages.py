@@ -40,6 +40,16 @@ CHANGE_UNAVAILABLE_RETRY = (
     "Сейчас не получается выполнить изменение. "
     "Ответьте «да» позже, чтобы повторить, или напишите «оператор»."
 )
+# Refusals after a text check don't say that the check exists or is down: the
+# subscriber can't act on it, and it would tell an attacker the filter's state.
+INPUT_REFUSED = (
+    "Не могу выполнить такую просьбу. Я помогаю с тарифом, "
+    "списаниями, услугами и контактами."
+)
+OUTPUT_REFUSED = (
+    "Не получилось подготовить ответ. Переформулируйте, пожалуйста, "
+    "вопрос или напишите «оператор»."
+)
 
 TARIFF_CHANGED = (
     "Готово: тариф изменён с «{before}» на «{after}», {price_after} ₽/мес."

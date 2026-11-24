@@ -37,6 +37,15 @@ venvPath = "."
 venv = ".venv"
 typeCheckingMode = "standard"
 
+# Hexlet's tests/smoke.py stays as Hexlet ships it, so the two rules its own
+# code breaks are off for this file alone: it reads db.fetchone's row without
+# checking for None and passes a str | None where its helper wants a str.
+[[tool.basedpyright.executionEnvironments]]
+root = "tests/smoke.py"
+extraPaths = ["."]
+reportOptionalSubscript = false
+reportArgumentType = false
+
 [tool.ruff]
 target-version = "py312"
 line-length = 80

@@ -7,8 +7,8 @@ after the subscriber confirms a card that shows exactly what will change.
 
 [![hexlet-check](https://github.com/denbon05/llm-developer-project-445/actions/workflows/hexlet-check.yml/badge.svg)](https://github.com/denbon05/llm-developer-project-445/actions)
 
-> **Status:** in development. The stand, the checks, the agents, actions and
-> policies run; the guardrail is being built.
+> **Status:** in development. The stand, the checks, the agents, actions,
+> policies and the guardrail run.
 
 ## Highlights
 

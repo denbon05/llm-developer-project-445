@@ -3,11 +3,6 @@
 A turn is one subscriber message. The orchestrator decides which agents run and
 collects the turn's events for the browser. An answer to a live confirmation
 card is handled by code, without the model.
-
-TODO(guardrail) — guardrail: input-проверка реплики до всего хода (unsafe →
-  отказ, запись в аудит); output-проверка ответа и карточки до показа;
-  недоступный сервис → session.guard_state["ok"] = False (fail-closed
-  для действий), чтение продолжается.
 """
 
 from __future__ import annotations
@@ -24,7 +19,7 @@ from actions.contracts import (
     parse_execution_result,
     parse_ticket_result,
 )
-from app import audit, cards, idempotency, messages
+from app import audit, cards, guardrail_client, idempotency, messages
 from app.answers import CardAnswer, classify_card_answer
 from app.audit import AuditOutcome
 from app.cards import Card, CardState
@@ -35,6 +30,7 @@ from app.editor import (
     has_citation,
     remove_unknown_citations,
 )
+from app.guardrail_client import CheckMode
 from app.llm import AgentRun, run_agent
 from app.pep import PolicyReason
 from app.planner import (
@@ -47,6 +43,7 @@ from app.planner import (
 from app.sessions import Session, pep_of
 from app.tools import PREPARE_TOOL_NAMES, ToolName
 from app.workers import build_worker_agents
+from app.wrap import read_denial_reason
 from core.logging import get_logger, make_trace_id
 
 logger = get_logger(__name__)
@@ -89,6 +86,8 @@ TICKET_FAILED_DETAIL = "ticket_failed"
 REFUSAL_REPLY_BY_REASON: dict[str, str] = {
     PolicyReason.SESSION_LIMIT: messages.SESSION_TARIFF_LIMIT,
     PolicyReason.PDP_UNAVAILABLE: messages.CHANGE_UNAVAILABLE_RETRY,
+    # The guardrail gave no verdict on this turn: a later "да" may pass.
+    PolicyReason.GUARD_NOT_OK: messages.CHANGE_UNAVAILABLE_RETRY,
     PolicyReason.CARD_NOT_PREPARED: messages.CARD_NOT_PREPARED,
 }
 
@@ -225,6 +224,100 @@ def record_card_entry(
     )
 
 
+def record_check_entry(
+    session: Session,
+    outcome: AuditOutcome,
+    mode: CheckMode,
+    *,
+    detail: str | None = None,
+) -> None:
+    """Add an entry about a text check to the audit journal."""
+    # The mode names what was checked; the text itself never reaches the
+    # journal: it may hold names, phones and emails.
+    audit.append(
+        session.user.sub,
+        mode,
+        outcome,
+        trace_id=session.trace_id,
+        session_id=session.session_id,
+        detail=detail,
+    )
+
+
+async def is_input_safe(session: Session, text: str) -> bool:
+    """Return whether the subscriber's text is safe.
+
+    Unchecked text counts as safe. Set session.guard_ok to whether the
+    guardrail answered.
+    """
+    verdict = await guardrail_client.check(text, mode=CheckMode.INPUT)
+    # Every stage of a card in this turn asks the policy with this flag, and
+    # the policy refuses each one without a verdict.
+    session.guard_ok = verdict.available
+    if not verdict.available:
+        # Reading goes on: the text counts as safe.
+        record_check_entry(
+            session, AuditOutcome.GUARDRAIL_DEGRADED, CheckMode.INPUT
+        )
+        return True
+    if verdict.safe:
+        return True
+    logger.warning(
+        "guardrail_unsafe", mode=CheckMode.INPUT, category=verdict.category
+    )
+    record_check_entry(
+        session,
+        AuditOutcome.GUARDRAIL_UNSAFE,
+        CheckMode.INPUT,
+        detail=verdict.category,
+    )
+    return False
+
+
+def format_card_rows(card: Card) -> list[str]:
+    """Return the card's rows as `label: value` lines."""
+    return [f"{label}: {value}" for label, value in card.view.items()]
+
+
+async def is_output_safe(
+    session: Session, text: str, card: Card | None
+) -> bool:
+    """Check the text and the card's rows; return whether they are safe."""
+    checked_lines = [text, *format_card_rows(card)] if card else [text]
+    verdict = await guardrail_client.check(
+        "\n".join(checked_lines), mode=CheckMode.OUTPUT
+    )
+    if not verdict.available:
+        # Reading goes on, but no card stage passes the policy any more in
+        # this turn.
+        session.guard_ok = False
+        record_check_entry(
+            session, AuditOutcome.GUARDRAIL_DEGRADED, CheckMode.OUTPUT
+        )
+        return True
+    if verdict.safe:
+        return True
+    logger.warning(
+        "guardrail_unsafe", mode=CheckMode.OUTPUT, category=verdict.category
+    )
+    if card is None:
+        record_check_entry(
+            session,
+            AuditOutcome.GUARDRAIL_UNSAFE,
+            CheckMode.OUTPUT,
+            detail=verdict.category,
+        )
+        return False
+    # A turn whose text shows an injection can't be trusted with the card it
+    # made: the card takes no answers any more.
+    cards.settle_card(card, CardState.BLOCKED)
+    record_card_entry(
+        session, card, AuditOutcome.GUARDRAIL_UNSAFE, detail=verdict.category
+    )
+    logger.info("card_blocked", pending_id=card.pending_id)
+    return False
+
+
 def classify_execution(
     execution_outcome: str,
 ) -> tuple[AuditOutcome, str | None]:
@@ -355,9 +448,9 @@ async def confirm_and_execute(session: Session, card: Card) -> str:
     pep = pep_of(session)
     # The PDP decides each stage: first whether the "да" confirms this card,
     # then whether the confirmed card may run.
-    decision = await pep.confirm(card)
+    decision = await pep.confirm(card, guard_ok=session.guard_ok)
     if decision.allowed:
-        decision = await pep.execute(card)
+        decision = await pep.execute(card, guard_ok=session.guard_ok)
     if not decision.allowed:
         return refuse_confirmation(session, card, decision.reason)
     return await execute_pending(session, card)
@@ -372,9 +465,7 @@ def format_attempt(entry: dict) -> str:
 
 def build_ticket_note(card: Card) -> str:
     """Return the card's rows, then a line with its execution attempts."""
-    card_rows = "; ".join(
-        f"{label}: {value}" for label, value in card.view.items()
-    )
+    card_rows = "; ".join(format_card_rows(card))
     attempts = [
         format_attempt(entry)
         for entry in audit.find_card_entries(build_idempotency_key(card))
@@ -519,35 +610,71 @@ def find_ticket_id(run: AgentRun) -> str | None:
     return None
 
 
-def has_created_card_or_ticket(run: AgentRun) -> bool:
-    """Return whether the agent's run created a card or a ticket."""
-    return has_created_card(run) or find_ticket_id(run) is not None
+def is_stopped_at_denial(run: AgentRun) -> bool:
+    """Return whether a denied tool call ended the agent's run."""
+    # A denial ends the run with a fixed report instead of the model's.
+    return any(
+        read_denial_reason(tool_call.output) is not None
+        for tool_call in run.tool_calls
+    )
 
 
-async def send_card_and_ticket_replies(
+def has_fixed_reply(run: AgentRun) -> bool:
+    """Return whether the run created a card or a ticket, or met a denial."""
+    return (
+        has_created_card(run)
+        or find_ticket_id(run) is not None
+        or is_stopped_at_denial(run)
+    )
+
+
+async def send_code_and_editor_replies(
     session: Session,
     message: str,
+    *,
     worker_runs: list[AgentRun],
     card: Card | None,
     ticket_ids: list[str],
+    denial_reports: list[str],
     emit: Emit,
 ) -> None:
-    """Send the replies of a turn whose agents created a card or tickets."""
+    """Send the replies of a turn with a new card, tickets or denials."""
     # A model must not retell card prices or ticket ids: small models distort
-    # them. So the runs that created a card or a ticket skip the editor, and
-    # code writes fixed texts for them below.
-    editor_runs = [
-        run for run in worker_runs if not has_created_card_or_ticket(run)
-    ]
+    # them. So the runs with a fixed reply skip the editor, and code writes
+    # the texts for them below. A denial report is a fixed text already: the
+    # editor would only reword it.
+    editor_runs = [run for run in worker_runs if not has_fixed_reply(run)]
     # Every text sent in this turn, for the dialogue history.
     sent_texts = []
     sources = []
 
-    # 1. The other runs, for example an answer to a question asked in the
-    # same message, go to the editor as in any turn.
+    # The other runs, for example an answer to a question asked in the same
+    # message, go to the editor as in any turn.
+    editor_reply = ""
     if editor_runs:
         sources = collect_kb_sources(editor_runs)
         editor_reply = await write_reply(session, message, editor_runs, sources)
+
+    # The card, read again: the editor may have taken a while, so the card's
+    # state and the seconds it has left must be current.
+    current_card = (
+        cards.find_card(session.session_id, card.pending_id) if card else None
+    )
+    live_card = (
+        current_card
+        if current_card is not None and current_card.is_live
+        else None
+    )
+    # One check over everything a model wrote or a tool returned in this
+    # turn. An unsafe text blocks the live card, so it is never shown.
+    if (editor_reply or live_card) and not await is_output_safe(
+        session, editor_reply, live_card
+    ):
+        editor_reply, sources = messages.OUTPUT_REFUSED, []
+        live_card = None
+
+    # 1. The editor's reply, or the refusal that replaces it.
+    if editor_reply:
         await emit({"type": "reply", "text": editor_reply, "sources": sources})
         sent_texts.append(editor_reply)
 
@@ -557,34 +684,34 @@ async def send_card_and_ticket_replies(
         await emit({"type": "reply", "text": ticket_text, "sources": []})
         sent_texts.append(ticket_text)
 
-    # 3. The card, read again: the editor may have taken a while, so the
-    # card's state and the seconds it has left must be current.
-    current_card = (
-        cards.find_card(session.session_id, card.pending_id) if card else None
-    )
+    # 3. The report of each run a denial stopped, as code wrote it.
+    for denial_report in denial_reports:
+        await emit({"type": "reply", "text": denial_report, "sources": []})
+        sent_texts.append(denial_report)
+
+    # 4. The card.
     shown_card_id = ""
-    if current_card is not None and current_card.is_live:
+    if live_card is not None:
         # The card, then a fixed text that asks to confirm or cancel it.
         await emit(
             {
                 "type": "card",
-                "pending_id": current_card.pending_id,
-                "card": current_card.public_view(),
+                "pending_id": live_card.pending_id,
+                "card": live_card.public_view(),
             }
         )
         await emit(
             {"type": "reply", "text": messages.CARD_READY, "sources": []}
         )
         sent_texts.append(messages.CARD_READY)
-        shown_card_id = current_card.pending_id
+        shown_card_id = live_card.pending_id
     elif (
         current_card is not None
         and current_card.state == CardState.PENDING
         and current_card.is_expired
     ):
         # A slow turn outlived the card: it can't be answered any more, so
-        # it isn't shown, and the subscriber learns why. Other states (a
-        # refusal by the guardrail of a later step) need their own reply.
+        # it isn't shown, and the subscriber learns why.
         logger.info("card_expired", pending_id=current_card.pending_id)
         settle_expired_card(session, current_card)
         await emit(
@@ -609,7 +736,12 @@ async def run_agents(
     plan = await make_plan(session, message)
     # The planner needs more details: its question is the whole reply.
     if plan.question:
-        await send_reply(session, message, plan.question, [], emit)
+        question = (
+            plan.question
+            if await is_output_safe(session, plan.question, None)
+            else messages.OUTPUT_REFUSED
+        )
+        await send_reply(session, message, question, [], emit)
         return
     # Show the browser which agents work on what.
     if plan.steps:
@@ -617,23 +749,34 @@ async def run_agents(
 
     worker_runs = await run_steps(session, plan.steps)
 
-    # Did the agents create a card or tickets? Then code writes those parts
-    # of the reply, and the editor only the rest.
+    # Did the agents create a card or tickets, or meet a denial? Then code
+    # writes those parts of the reply, and the editor only the rest.
     new_card = find_new_card(
         latest_card, cards.find_latest_card(session.session_id)
     )
     ticket_ids = [
         ticket_id for run in worker_runs if (ticket_id := find_ticket_id(run))
     ]
-    if new_card is not None or ticket_ids:
-        await send_card_and_ticket_replies(
-            session, message, worker_runs, new_card, ticket_ids, emit
+    denial_reports = [
+        run.report for run in worker_runs if is_stopped_at_denial(run)
+    ]
+    if new_card is not None or ticket_ids or denial_reports:
+        await send_code_and_editor_replies(
+            session,
+            message,
+            worker_runs=worker_runs,
+            card=new_card,
+            ticket_ids=ticket_ids,
+            denial_reports=denial_reports,
+            emit=emit,
         )
         return
 
     # Nothing was created: the editor writes the whole reply.
     sources = collect_kb_sources(worker_runs)
     reply = await write_reply(session, message, worker_runs, sources)
+    if not await is_output_safe(session, reply, None):
+        reply, sources = messages.OUTPUT_REFUSED, []
     await send_reply(session, message, reply, sources, emit)
 
 
@@ -643,6 +786,17 @@ async def run_turn(session: Session, message: str, emit: Emit) -> None:
     async with session.turn_lock:
         start_trace(session)
         logger.info("turn_started")
+        # The guardrail reads every message before anything else, a typed
+        # "да" too: the turn that executes a card must know whether the
+        # guardrail answers.
+        if not await is_input_safe(session, message):
+            # Not remembered: the message must not reach the planner on a
+            # later turn. The card stays as it was.
+            await emit(
+                {"type": "reply", "text": messages.INPUT_REFUSED, "sources": []}
+            )
+            logger.info("turn_finished", sources=0, card="", tickets=0)
+            return
         latest_card = cards.find_latest_card(session.session_id)
         # First code checks whether the message answers a card.
         reply = await apply_message_to_card(session, message, latest_card)
@@ -666,6 +820,11 @@ async def decide_card(
     # The same lock as a turn, so an answer never runs in the middle of one.
     async with session.turn_lock:
         start_trace(session)
+        # Checked like a typed answer. The words can't be unsafe, but the
+        # check tells whether the guardrail answers now, on the turn that
+        # executes.
+        if not await is_input_safe(session, ANSWER_MESSAGES[answer]):
+            return messages.INPUT_REFUSED
         # The id names the card exactly; the same rules as for a typed answer
         # decide what the press does.
         card = cards.find_card(session.session_id, pending_id)

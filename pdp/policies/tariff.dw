@@ -4,11 +4,15 @@
 // matching forbid beats every permit. The PDP keeps one history of requests
 // per chat session, so the temporal rules see only that session's requests,
 // allowed and denied alike.
+//
+// Every stage of a card needs a turn whose text check answered: guard_ok is
+// false when the guardrail gave no verdict on the turn's text, and then no
+// card is prepared, confirmed or executed.
 
-// 1. Only a client with the write scope may prepare a card. The input must
-// not name a subscriber: the subject comes from the token. The PDP checks
-// only the policy against the schema, not the requests, so these checks are
-// the only ones that refuse such a key.
+// 1. Only a client with the write scope may prepare a card, in a turn whose
+// text check answered. The input must not name a subscriber: the subject
+// comes from the token. The PDP checks only the policy against the schema,
+// not the requests, so these checks are the only ones that refuse such a key.
 permit (principal, action == Tel::Action::"Prepare", resource)
 when {
     context.input.role == "client"
@@ -17,10 +21,12 @@ when {
     && !(context.input has account)
     && !(context.input has subscriber)
     && !(context.input has msisdn)
+    && context.input.guard_ok
 };
 
 // 2. A "да" confirms only a card prepared earlier in the session, with the
-// same id, action and details: it can't confirm a card nobody was shown.
+// same id, action and details, in a turn whose text check answered: it can't
+// confirm a card nobody was shown.
 // The window never closes in the running PDP (its events carry no time), so
 // the PDP checks the card's lifetime itself.
 //
@@ -39,6 +45,7 @@ when {
 // QA: the course checks the windows with replays, and a replayed event
 // without these fields would get Deny.
 permit (principal, action == Tel::Action::"ConfirmCard", resource)
+when { context.input.guard_ok }
 when temporal {
     formerly within 1h Tel::Action::"Prepare"::request{
         input.pending_id: context.input.pending_id,
@@ -47,8 +54,10 @@ when temporal {
     }
 };
 
-// 3. Only a confirmed card runs: the same card had a ConfirmCard before.
+// 3. Only a confirmed card runs: the same card had a ConfirmCard before, and
+// this turn's text check answered too.
 permit (principal, action == Tel::Action::"Execute", resource)
+when { context.input.guard_ok }
 when temporal {
     formerly within 1h Tel::Action::"ConfirmCard"::request{
         input.pending_id: context.input.pending_id,

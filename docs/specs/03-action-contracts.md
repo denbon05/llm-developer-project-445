@@ -164,9 +164,7 @@ answered by code if a `prepare_*` call returned `card_created`, or a
    has left, then `reply` with `CARD_READY`; if it is `pending` but expired
    during a slow turn, settle it `expired` with an audit entry `expired` and
    only `reply` with `CARD_EXPIRED`, so nobody is asked to confirm a card that
-   can't be answered. A card the policy refused is never stored. A new card in
-   another state (a refusal by the guardrail of a later step) needs its own
-   reply.
+   can't be answered. A card the policy refused is never stored.
 
 A failed `prepare_*` or `create_ticket` gives no card or id, and its report goes
 to the editor as usual. The planner history gets the texts sent, joined by a

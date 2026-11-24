@@ -1,4 +1,4 @@
-"""Finding the card or ticket a worker run created. No services needed."""
+"""Finding the card, ticket or denial of a worker run. No services needed."""
 
 import json
 
@@ -10,7 +10,7 @@ from app.orchestrator import (
     find_new_card,
     find_ticket_id,
     has_created_card,
-    has_created_card_or_ticket,
+    has_fixed_reply,
 )
 from app.tools import ToolName
 from core import config
@@ -36,7 +36,6 @@ def test_ticket_id_comes_from_the_tool_output():
     )
 
     assert find_ticket_id(run) == "t_1674"
-    assert has_created_card_or_ticket(run)
 
 
 def test_failed_ticket_call_created_no_ticket():
@@ -44,7 +43,6 @@ def test_failed_ticket_call_created_no_ticket():
     run = run_with((ToolName.CREATE_TICKET, {"error": "tool_failed"}))
 
     assert find_ticket_id(run) is None
-    assert not has_created_card_or_ticket(run)
 
 
 def test_output_that_is_not_json_is_no_ticket():
@@ -62,14 +60,57 @@ def test_card_is_found_among_other_tool_calls():
     )
 
     assert has_created_card(run)
-    assert has_created_card_or_ticket(run)
 
 
-def test_refused_prepare_created_no_card():
-    """A refusal from a prepare tool is not a card."""
-    run = run_with((ToolName.PREPARE_TARIFF_CHANGE, {"error": "same_tariff"}))
-
-    assert not has_created_card_or_ticket(run)
+@pytest.mark.parametrize(
+    ("run", "expected_has_fixed_reply"),
+    [
+        # A ticket: code writes its text with the id.
+        (
+            run_with(
+                (
+                    ToolName.CREATE_TICKET,
+                    {"ticket_id": "t_1674", "status": "open"},
+                )
+            ),
+            True,
+        ),
+        # A failed ticket call created nothing: the editor reports it.
+        (run_with((ToolName.CREATE_TICKET, {"error": "tool_failed"})), False),
+        # A card among other tool calls.
+        (
+            run_with(
+                (ToolName.GET_MY_TARIFF, {"tariff": "Базовый"}),
+                (ToolName.PREPARE_TARIFF_CHANGE, {"card_created": True}),
+            ),
+            True,
+        ),
+        # A refusal from a prepare tool is not a card.
+        (
+            run_with(
+                (ToolName.PREPARE_TARIFF_CHANGE, {"error": "same_tariff"})
+            ),
+            False,
+        ),
+        # A denied call stopped the run with a fixed report.
+        (
+            run_with(
+                (
+                    ToolName.PREPARE_TARIFF_CHANGE,
+                    {
+                        "error": "denied",
+                        "reason": "guard_not_ok",
+                        "retryable": False,
+                    },
+                )
+            ),
+            True,
+        ),
+    ],
+)
+def test_runs_with_a_fixed_reply_skip_the_editor(run, expected_has_fixed_reply):
+    """Code writes the texts of cards, tickets and denials, not the editor."""
+    assert has_fixed_reply(run) is expected_has_fixed_reply
 
 
 def make_card(pending_id: str) -> Card:

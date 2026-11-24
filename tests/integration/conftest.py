@@ -1,10 +1,15 @@
-"""A throwaway Postgres for the tests of this folder. Needs Docker."""
+"""A throwaway Postgres and a fake guardrail for the tests of this folder.
+
+Needs Docker.
+"""
 
 from collections.abc import Iterator
 
 import pytest
 from testcontainers.community.postgres import PostgresContainer
 
+from app import guardrail_client
+from app.guardrail_client import Verdict
 from core import db
 
 # The image docker-compose.yml uses: the schema needs the pgvector extension.
@@ -36,3 +41,24 @@ def empty_tables() -> None:
         restart identity
         """
     )
+
+
+class FakeGuardrail:
+    """Answers every check safe unless a test sets a verdict for its mode."""
+
+    def __init__(self) -> None:
+        # The mode, such as "input", and the verdict every check in it gets.
+        self.verdict_by_mode: dict[str, Verdict] = {}
+
+    async def check(self, text: str, mode: str) -> Verdict:
+        return self.verdict_by_mode.get(
+            mode, Verdict(safe=True, category=None, available=True)
+        )
+
+
+@pytest.fixture(autouse=True)
+def fake_guardrail(monkeypatch) -> FakeGuardrail:
+    """Replace the guardrail client's check with a fake's."""
+    guardrail = FakeGuardrail()
+    monkeypatch.setattr(guardrail_client, "check", guardrail.check)
+    return guardrail

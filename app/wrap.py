@@ -28,6 +28,11 @@ logger = get_logger(__name__)
 DENIED_ERROR = "denied"
 # Arguments that retell the subscriber's words: the journal keeps no dialogue.
 FREE_TEXT_ARGUMENTS = frozenset({"note"})
+# Denials because a service gave no answer: the PDP, or the guardrail on this
+# turn. A later try may pass.
+SERVICE_UNAVAILABLE_REASONS = frozenset(
+    {PolicyReason.PDP_UNAVAILABLE, PolicyReason.GUARD_NOT_OK}
+)
 
 # I18N: the answers the subscriber must give.
 CARD_NEXT_STEP = (
@@ -48,7 +53,7 @@ async def create_card(
         session, prepared["action"], prepared["details"], prepared["view"]
     )
     # The PDP decides whether this card may exist at all.
-    decision = await pep_of(session).prepare(card)
+    decision = await pep_of(session).prepare(card, guard_ok=session.guard_ok)
     if not decision.allowed:
         # Nothing is stored, so the session's previous pending card stays
         # live.
@@ -277,11 +282,11 @@ def stop_run_at_denial(
         # The SDK passes no agent here; in the log this follows the denial
         # and precedes the run's llm_run_completed, which names the agent.
         logger.info("agent_run_stopped", reason=DENIED_ERROR)
-        # Without the PDP no change can be made now, which the subscriber
-        # may try again later; any other denial is final.
+        # Without the PDP or the guardrail no change can be made now, which
+        # the subscriber may try again later; any other denial is final.
         final_output = (
             messages.CHANGE_UNAVAILABLE
-            if denial_reason == PolicyReason.PDP_UNAVAILABLE
+            if denial_reason in SERVICE_UNAVAILABLE_REASONS
             else messages.OPERATION_DENIED
         )
         return ToolsToFinalOutputResult(

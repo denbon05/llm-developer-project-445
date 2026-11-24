@@ -39,8 +39,9 @@ Input of all three (the schema's closed `WriteInput` record):
   `sort_keys` is required: the policy compares the string, and jsonb returns
   keys in its own order, so the card read back for "да" would not match the
   one prepared.
-- `guard_ok` is always `true`: no text check exists yet, and the policy
-  doesn't read it.
+- `guard_ok` is the turn's flag `Session.guard_ok`: whether the guardrail
+  answered on this turn. Every stage requires it; see
+  [07](07-guardrail.md).
 - `sub`, `role`, `scopes` (`scope` split on spaces) come from the session's
   token claims.
 
@@ -112,7 +113,8 @@ at the spots where it matters say in plain words what the PDP decides and what
 the PEP does with the answer.
 
 - `PolicyReason(StrEnum)`: the reasons code branches on: `session_limit`,
-  `confirmation_expired`, `card_not_prepared`, `pdp_unavailable`.
+  `confirmation_expired`, `card_not_prepared`, `pdp_unavailable`,
+  `guard_not_ok`.
 - Decisions are `app.permissions.Decision(allowed, reason)` (smoke reads
   `.allowed` and `.reason`); its docstring becomes general ("whether an
   operation may go ahead and, if not, why").

@@ -29,6 +29,7 @@ class PolicyReason(StrEnum):
     CONFIRMATION_EXPIRED = "confirmation_expired"
     CARD_NOT_PREPARED = "card_not_prepared"
     PDP_UNAVAILABLE = "pdp_unavailable"
+    GUARD_NOT_OK = "guard_not_ok"
 
 
 def build_pdp_client() -> httpx2.AsyncClient:
@@ -73,27 +74,31 @@ class Pep:
         self.tokens = tokens
         self.is_pdp_session_open = False
 
-    async def prepare(self, card: Card) -> Decision:
+    # guard_ok is whether the guardrail answered on the turn that asks; the
+    # policy refuses every stage without it. True by default: tests/smoke.py
+    # group 3 calls prepare(card) on a fresh session and expects Allow. The
+    # app always passes the session's flag.
+    async def prepare(self, card: Card, *, guard_ok: bool = True) -> Decision:
         """Ask whether the card may exist."""
         # The policy allows a client with the write scope. The PDP records an
         # allowed card in its journal: a later "да" must match it.
-        return await self.decide("Prepare", card)
+        return await self.decide("Prepare", card, guard_ok)
 
-    async def confirm(self, card: Card) -> Decision:
+    async def confirm(self, card: Card, *, guard_ok: bool = True) -> Decision:
         """Ask whether a "да" may confirm the card."""
         # The PDP first checks its journal: the card was allowed and is still
         # in time. Then the policy: the same card with the same details.
-        return await self.decide("ConfirmCard", card)
+        return await self.decide("ConfirmCard", card, guard_ok)
 
-    async def execute(self, card: Card) -> Decision:
+    async def execute(self, card: Card, *, guard_ok: bool = True) -> Decision:
         """Ask whether the confirmed card may run."""
         # The policy allows a confirmed card unless it is the session's third
         # distinct tariff change.
-        return await self.decide("Execute", card)
+        return await self.decide("Execute", card, guard_ok)
 
-    async def decide(self, action: str, card: Card) -> Decision:
+    async def decide(self, action: str, card: Card, guard_ok: bool) -> Decision:
         """Ask the PDP about one stage of the card and log its decision."""
-        decision = await self.request_decision(action, card)
+        decision = await self.request_decision(action, card, guard_ok)
         logger.info(
             "policy_decision",
             action=action,
@@ -103,11 +108,13 @@ class Pep:
         )
         return decision
 
-    async def request_decision(self, action: str, card: Card) -> Decision:
+    async def request_decision(
+        self, action: str, card: Card, guard_ok: bool
+    ) -> Decision:
         """Send the PDP the request for one stage and return its decision."""
         request_body = {
             "session_id": self.session_id,
-            "input": await self.build_policy_input(card),
+            "input": await self.build_policy_input(card, guard_ok),
             # The turn that asks, for the PDP's journal of decisions.
             "trace_id": read_trace_id(),
         }
@@ -175,8 +182,8 @@ class Pep:
             "scopes": str(claims.get("scope", "")).split(),
         }
 
-    async def build_policy_input(self, card: Card) -> dict:
-        """Return what the policy reads about the card and its subject."""
+    async def build_policy_input(self, card: Card, guard_ok: bool) -> dict:
+        """Return what the policy reads: the card, the turn's flag, the subject."""
         subject = await self.read_subject()
         return {
             "action": card.action,
@@ -187,7 +194,7 @@ class Pep:
             "details": json.dumps(
                 card.details, ensure_ascii=False, sort_keys=True
             ),
-            # No text check exists yet, and the policy doesn't read it.
-            "guard_ok": True,
+            # Whether the guardrail answered on this turn.
+            "guard_ok": guard_ok,
             **subject,
         }

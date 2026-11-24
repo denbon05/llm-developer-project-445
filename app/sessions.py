@@ -3,8 +3,6 @@
 Одна сессия = один пользователь чата. При открытии сессии backend —
 доверенный клиент — выпускает у издателя токены для всех MCP-серверов
 (по одному на resource, RFC 8707) и держит открытые соединения.
-
-В guardrail вы ДОПОЛНИТЕ Session полем guard_state — verdikt guardrail хода.
 """
 
 from __future__ import annotations
@@ -49,6 +47,10 @@ class Session:
     planner: Agent | None = None  # built on the first turn
     # Asks the policy service before each stage of a card; see pep_of.
     pep: Pep | None = None
+    # Whether the guardrail answered on this turn: every stage of a card asks
+    # the policy with it. A turn sets it before its first policy request;
+    # True is for code that asks without a turn.
+    guard_ok: bool = True
     # One turn or card decision at a time: two "да" at once must not both
     # pass the idempotency check before either records its key.
     turn_lock: asyncio.Lock = field(default_factory=asyncio.Lock)

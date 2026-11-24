@@ -72,7 +72,9 @@ class FakePep(Pep):
         super().__init__(session_id="", tokens=None)  # pyright: ignore[reportArgumentType]
         self.decision = decision
 
-    async def request_decision(self, action: str, card: Card) -> Decision:
+    async def request_decision(
+        self, action: str, card: Card, guard_ok: bool
+    ) -> Decision:
         return self.decision
 
 
@@ -215,6 +217,21 @@ def test_prepare_stores_a_card_the_policy_allows(
             ],
             ToolsToFinalOutputResult(
                 is_final_output=True, final_output=messages.OPERATION_DENIED
+            ),
+        ),
+        # The guardrail gave no verdict on this turn: a later try may pass.
+        (
+            [
+                json.dumps(
+                    {
+                        "error": "denied",
+                        "reason": "guard_not_ok",
+                        "retryable": False,
+                    }
+                )
+            ],
+            ToolsToFinalOutputResult(
+                is_final_output=True, final_output=messages.CHANGE_UNAVAILABLE
             ),
         ),
         # Without one the model reads the outputs, a server's refusal too.

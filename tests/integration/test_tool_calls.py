@@ -9,8 +9,9 @@ import json
 import pytest
 from mcp.shared.exceptions import MCPError
 
-from actions.contracts import McpErrorCode
+from actions.contracts import ActionKind, McpErrorCode
 from app import audit, wrap
+from app.audit import AuditOutcome
 from app.sessions import Session
 from app.tools import ToolName
 from core import config
@@ -138,8 +139,8 @@ def test_every_model_call_leaves_a_tool_call_row(
             '{"tariff": "люкс"}',
             UNKNOWN_TARIFF_REFUSAL,
             {
-                "what": "tariff_change",
-                "outcome": "rejected_by_contract",
+                "what": ActionKind.TARIFF_CHANGE,
+                "outcome": AuditOutcome.REJECTED_BY_CONTRACT,
                 "args": {"tariff": "люкс"},
                 "detail": "unknown_tariff",
             },
@@ -153,8 +154,8 @@ def test_every_model_call_leaves_a_tool_call_row(
             ),
             PREPARED_ACTION,
             {
-                "what": "tariff_change",
-                "outcome": "denied",
+                "what": ActionKind.TARIFF_CHANGE,
+                "outcome": AuditOutcome.DENIED,
                 "args": {"sub": BORIS_SUB, "tariff": "семейный"},
                 "detail": "object_from_arguments:sub",
             },
@@ -165,8 +166,8 @@ def test_every_model_call_leaves_a_tool_call_row(
             '{"subject": "Тариф", "note": "хочу поговорить с человеком"}',
             {"ticket_id": "t_1674"},
             {
-                "what": "create_ticket",
-                "outcome": "escalated",
+                "what": ToolName.CREATE_TICKET,
+                "outcome": AuditOutcome.ESCALATED,
                 "args": {"subject": "Тариф"},
                 "detail": "t_1674",
             },

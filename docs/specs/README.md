@@ -12,3 +12,4 @@ later.
 | 4 | [Audit and telemetry](04-audit.md) | G=3 | done |
 | 5 | [Permissions](05-permissions.md) | G=4 | done |
 | 6 | [Policies](06-policies.md) | G=3, G=4 | done |
+| 7 | [Guardrail](07-guardrail.md) | G=5 | done |
