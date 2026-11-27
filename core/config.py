@@ -37,6 +37,10 @@ PDP_PORT = int(os.environ.get("PDP_PORT", "9100"))
 PDP_URL = f"http://127.0.0.1:{PDP_PORT}"
 GUARDRAIL_PORT = int(os.environ.get("GUARDRAIL_PORT", "8300"))
 GUARDRAIL_URL = f"http://127.0.0.1:{GUARDRAIL_PORT}"
+# Whether the guardrail also asks the HiveTraceGuard-Pro model ("1"). Off by
+# default: Hexlet's checker and CI have neither its packages nor its weights.
+# POST-QA: default "1" once the model is in the main stack; CI keeps "0".
+GUARDRAIL_MODEL = os.environ.get("GUARDRAIL_MODEL", "0") == "1"
 
 PG_DSN = os.environ.get(
     "PG_DSN", "postgresql://operator:operator@127.0.0.1:5434/operator"

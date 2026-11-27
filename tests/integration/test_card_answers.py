@@ -565,7 +565,7 @@ def send_new_card_replies(session: Session, card: Card) -> list[dict]:
     return sent_events
 
 
-def test_new_live_card_is_shown():
+def test_new_live_card_is_shown(stub_guardrail):
     """The card goes to the browser, then the text that asks to answer it."""
     session = make_session(StubMcpPool({}))
     card = create_tariff_card(session)
@@ -574,6 +574,8 @@ def test_new_live_card_is_shown():
 
     assert [event["type"] for event in sent_events] == ["card", "reply"]
     assert sent_events[1]["text"] == messages.CARD_READY
+    # The card's rows were checked as a reply to the turn's message.
+    assert stub_guardrail.received_subscriber_message == ["смени тариф"]
 
 
 @pytest.mark.parametrize(

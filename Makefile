@@ -28,6 +28,7 @@ help:
 	@echo "make test-integration - тесты на настоящем Postgres (нужен Docker)"
 	@echo "make smoke      - проверки по шагам, группа: make smoke G=0"
 	@echo "make scenarios  - диалоговые сценарии на живой LLM      [сценарии]"
+	@echo "make compare-guardrail - правила и модель guardrail на одних текстах, отчёт в docs/reports"
 	@echo "make trace      - журналы одного хода, T=<trace_id>, без T — последний"
 	@echo "make reset      - вернуть демо-данные моков в исходное"
 	@echo "make lint       - ruff + pylint (короткие имена), F=<файлы>"
@@ -36,10 +37,12 @@ help:
 	@echo "make inspect-mcp - все MCP-серверы в MCP Inspector, LOGIN=<пользователь>"
 
 # requirements.txt follows uv.lock because Hexlet's checker installs from it.
+# Only the [project] dependencies: --no-default-groups leaves out every group
+# uv sync installs (dev tools, the guardrail's model).
 install:
 ifdef UV
 	uv sync
-	uv export --quiet --frozen --no-dev --no-hashes --no-emit-project --format requirements-txt -o requirements.txt
+	uv export --quiet --frozen --no-default-groups --no-hashes --no-emit-project --format requirements-txt -o requirements.txt
 else
 	python -m pip install -r requirements.txt
 endif
@@ -108,6 +111,10 @@ smoke:
 
 scenarios:
 	$(RUN) python -m scripts.run_scenarios
+
+# Needs the guardrail-model group (make install); downloads the weights once.
+compare-guardrail:
+	$(RUN) python -m scripts.compare_guardrail_engines
 
 # The trace to print: make trace T=tr_1a2b3c4d5e6f. Without T, the newest one.
 T ?=

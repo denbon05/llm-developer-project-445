@@ -4,6 +4,7 @@ A stub service on httpx2.MockTransport answers, so no services are needed.
 """
 
 import asyncio
+import json
 
 import httpx2
 import pytest
@@ -17,10 +18,15 @@ UNAVAILABLE = Verdict(safe=True, category=None, available=False)
 
 def install_stub_service(
     monkeypatch, service_answer: httpx2.Response | type[httpx2.TransportError]
-) -> None:
-    """Make the client reach a stub service that gives this answer."""
+) -> list[dict]:
+    """Make the client reach a stub service that gives this answer.
+
+    Return the list the stub fills with the request bodies it receives.
+    """
+    received_bodies = []
 
     def answer(request: httpx2.Request) -> httpx2.Response:
+        received_bodies.append(json.loads(request.content))
         if isinstance(service_answer, httpx2.Response):
             return service_answer
         raise service_answer("the service failed", request=request)
@@ -33,6 +39,7 @@ def install_stub_service(
             transport=httpx2.MockTransport(answer),
         ),
     )
+    return received_bodies
 
 
 @pytest.mark.parametrize(
@@ -85,3 +92,37 @@ def test_client_reads_the_verdict(
     )
 
     assert verdict == expected_verdict
+
+
+def test_client_sends_the_subscriber_message(monkeypatch):
+    """The message an output text replies to reaches the service with it."""
+    received_bodies = install_stub_service(
+        monkeypatch,
+        httpx2.Response(
+            200,
+            json={
+                "verdict": "safe",
+                "category": None,
+                "engine": "rule",
+                "mode": "output",
+            },
+        ),
+    )
+
+    subscriber_message = "какой у меня тариф?"
+    reply = "Ваш тариф «Базовый»."
+
+    asyncio.run(
+        guardrail_client.check(
+            reply, mode=CheckMode.OUTPUT, subscriber_message=subscriber_message
+        )
+    )
+
+    # The body holds the reply as the text and the message it replies to.
+    assert received_bodies == [
+        {
+            "text": reply,
+            "mode": "output",
+            "subscriber_message": subscriber_message,
+        }
+    ]

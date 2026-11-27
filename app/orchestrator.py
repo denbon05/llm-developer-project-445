@@ -280,12 +280,17 @@ def format_card_rows(card: Card) -> list[str]:
 
 
 async def is_output_safe(
-    session: Session, text: str, card: Card | None
+    session: Session, text: str, card: Card | None, *, subscriber_message: str
 ) -> bool:
-    """Check the text and the card's rows; return whether they are safe."""
+    """Check the text and the card's rows; return whether they are safe.
+
+    subscriber_message: the message the text replies to.
+    """
     checked_lines = [text, *format_card_rows(card)] if card else [text]
     verdict = await guardrail_client.check(
-        "\n".join(checked_lines), mode=CheckMode.OUTPUT
+        "\n".join(checked_lines),
+        mode=CheckMode.OUTPUT,
+        subscriber_message=subscriber_message,
     )
     if not verdict.available:
         # Reading goes on, but no card stage passes the policy any more in
@@ -668,7 +673,7 @@ async def send_code_and_editor_replies(
     # One check over everything a model wrote or a tool returned in this
     # turn. An unsafe text blocks the live card, so it is never shown.
     if (editor_reply or live_card) and not await is_output_safe(
-        session, editor_reply, live_card
+        session, editor_reply, live_card, subscriber_message=message
     ):
         editor_reply, sources = messages.OUTPUT_REFUSED, []
         live_card = None
@@ -738,7 +743,9 @@ async def run_agents(
     if plan.question:
         question = (
             plan.question
-            if await is_output_safe(session, plan.question, None)
+            if await is_output_safe(
+                session, plan.question, None, subscriber_message=message
+            )
             else messages.OUTPUT_REFUSED
         )
         await send_reply(session, message, question, [], emit)
@@ -775,7 +782,9 @@ async def run_agents(
     # Nothing was created: the editor writes the whole reply.
     sources = collect_kb_sources(worker_runs)
     reply = await write_reply(session, message, worker_runs, sources)
-    if not await is_output_safe(session, reply, None):
+    if not await is_output_safe(
+        session, reply, None, subscriber_message=message
+    ):
         reply, sources = messages.OUTPUT_REFUSED, []
     await send_reply(session, message, reply, sources, emit)
 

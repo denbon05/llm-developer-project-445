@@ -12,8 +12,8 @@ from core.logging import get_logger, shorten_for_log
 
 logger = get_logger(__name__)
 
-# The check is a few regular expressions; a stuck service must not hang the
-# turn.
+# The rules answer at once, the model in a few hundred milliseconds; a stuck
+# service must not hang the turn.
 GUARDRAIL_TIMEOUT_SEC = 2
 
 
@@ -73,13 +73,21 @@ def report_unavailable(mode: CheckMode, **failure: object) -> Verdict:
     return UNAVAILABLE
 
 
-async def check(text: str, mode: CheckMode) -> Verdict:
-    """Return the service's verdict on the text in this mode."""
+async def check(
+    text: str, mode: CheckMode, *, subscriber_message: str | None = None
+) -> Verdict:
+    """Return the service's verdict on the text in this mode.
+
+    subscriber_message: for an output text, the subscriber's message it replies to,
+    such as «какой у меня тариф?» for «Ваш тариф «Базовый».». The service's
+    model then judges the text as that reply.
+    """
+    check_body: dict[str, str] = {"text": text, "mode": mode}
+    if subscriber_message is not None:
+        check_body["subscriber_message"] = subscriber_message
     try:
         async with build_guardrail_client() as guardrail_client:
-            response = await guardrail_client.post(
-                "/check", json={"text": text, "mode": mode}
-            )
+            response = await guardrail_client.post("/check", json=check_body)
     except httpx2.HTTPError as error:
         # No connection or a timeout.
         return report_unavailable(mode, error_type=type(error).__name__)

@@ -49,8 +49,13 @@ class StubGuardrail:
     def __init__(self) -> None:
         # The mode, such as "input", and the verdict every check in it gets.
         self.verdict_by_mode: dict[str, Verdict] = {}
+        # The subscriber message every check was given, in order.
+        self.received_subscriber_message: list[str | None] = []
 
-    async def check(self, text: str, mode: str) -> Verdict:
+    async def check(
+        self, text: str, mode: str, *, subscriber_message: str | None = None
+    ) -> Verdict:
+        self.received_subscriber_message.append(subscriber_message)
         return self.verdict_by_mode.get(
             mode, Verdict(safe=True, category=None, available=True)
         )

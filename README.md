@@ -24,7 +24,9 @@ after the subscriber confirms a card that shows exactly what will change.
   Dogwood policies evaluated by a separate decision service. If the service is
   unreachable, actions are closed.
 - **A guardrail that fails closed for writes.** Text is checked before and after
-  the model. If the guardrail is down, reading still works and actions stop.
+  the model, by rules and, with `GUARDRAIL_MODEL=1`, by the
+  [HiveTraceGuard-Pro](https://huggingface.co/hivetrace/HiveTraceGuard-Pro)
+  classifier. If the guardrail is down, reading still works and actions stop.
 - **A full audit trail.** Actions, refusals, model calls and tool calls share a
   trace id, so any turn can be reconstructed.
 
@@ -71,8 +73,9 @@ make stand            # the stand on :8100; keep it running
 ```
 
 Then start the other processes, each in its own terminal: `make api`,
-`make actions`, `make pdp` and `make guardrail`. Open http://127.0.0.1:8100 and
-pick a demo user:
+`make actions`, `make pdp` and `make guardrail` (`GUARDRAIL_MODEL=1 make
+guardrail` adds the model; its first start downloads about 1.2 GB of weights).
+Open http://127.0.0.1:8100 and pick a demo user:
 
 | User | Role | Can do |
 | --- | --- | --- |
@@ -89,6 +92,8 @@ pick a demo user:
 - `make smoke` runs checks that need no model, grouped by component:
   `make smoke G=0` checks the stand.
 - `make scenarios` runs end-to-end dialogs from `data/dialogs/` on a live model.
+- `make compare-guardrail` runs the guardrail's rules and model on the same
+  texts and writes [a report](docs/reports/guardrail-engines.md).
 - `make lint` and `make format` run ruff and pylint; `make typecheck` runs basedpyright.
 
 ## Background
